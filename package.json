@@ -1,0 +1,18 @@
+{
+  "name": "svyazka-mvp",
+  "version": "0.4.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "dev": "docker compose up --build",
+    "stop": "docker compose down",
+    "reset": "docker compose down -v",
+    "build": "npm run build -w backend && npm run build -w frontend",
+    "test": "npm run test:e2e -w backend",
+    "test:e2e": "npm run test:e2e -w backend"
+  }
+}

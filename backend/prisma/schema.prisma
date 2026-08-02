@@ -1,0 +1,610 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  BRAND
+  CREATOR
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  BLOCKED
+}
+
+enum PromotionWithoutProduct {
+  YES
+  NO
+  LIMITED
+}
+
+enum OfferStatus {
+  DRAFT
+  MODERATION
+  PUBLISHED
+  PAUSED
+  ARCHIVED
+}
+
+enum CreatorKitAccessLevel {
+  DIGITAL
+  PRODUCT
+}
+
+enum CreatorKitAssetStatus {
+  UPLOADING
+  READY
+  DISABLED
+  DELETED
+  FAILED
+}
+
+enum CreatorKitProcessingStatus {
+  NOT_STARTED
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum CreatorKitAssetType {
+  PHOTO
+  VERTICAL_VIDEO
+  HORIZONTAL_VIDEO
+  PRODUCT_PNG
+  LOGO
+  LIFESTYLE
+  TEXTURE_VIDEO
+  USAGE_VIDEO
+  BANNER
+  DOCUMENT
+}
+
+enum CreatorKitScenarioChannel {
+  REELS
+  STORIES
+  TELEGRAM
+  THREADS
+  POST
+  SHORT_REVIEW
+  SELECTION
+}
+
+enum CreatorKitFactType {
+  DESCRIPTION
+  BENEFITS
+  INGREDIENTS
+  USAGE
+  PRICE
+  VOLUME
+  COUNTRY
+  TARGET_AUDIENCE
+  FEATURES
+  LIMITATIONS
+}
+
+enum CreatorKitClaimType {
+  ALLOWED
+  FORBIDDEN
+}
+
+enum OfferApplicationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum AffiliateRelationshipStatus {
+  ACTIVE
+  PAUSED
+  REVOKED
+}
+
+enum OrderImportStatus {
+  UPLOADED
+  VALIDATING
+  READY
+  IMPORTED
+  FAILED
+}
+
+enum OrderImportRowStatus {
+  VALID
+  INVALID
+  DUPLICATE
+  CONFLICT
+}
+
+enum OrderImportAction {
+  CREATE
+  UPDATE
+  SKIP
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  CANCELLED
+  RETURNED
+  PARTIALLY_RETURNED
+}
+
+enum AttributionSource {
+  AFFILIATE_CODE
+  PROMO_CODE
+  CLICK_ID
+  UNATTRIBUTED
+}
+
+enum CommissionStatus {
+  PENDING
+  HOLD
+  AVAILABLE
+  PAID
+  REVERSED
+}
+
+enum LedgerEntryType {
+  ACCRUAL
+  REVERSAL
+  PAYOUT
+}
+
+enum PayoutStatus {
+  DRAFT
+  APPROVED
+  PAID
+  CANCELLED
+}
+
+model User {
+  id                   String             @id @default(uuid()) @db.Uuid
+  email                String             @unique @db.VarChar(320)
+  passwordHash         String
+  role                 UserRole
+  status               UserStatus         @default(ACTIVE)
+  brandProfile         BrandProfile?
+  creatorProfile       CreatorProfile?
+  sessions             AuthSession[]
+  reviewedApplications OfferApplication[] @relation("ApplicationReviewer")
+  payoutsCreated       Payout[]           @relation("PayoutCreatedBy")
+  payoutsApproved      Payout[]           @relation("PayoutApprovedBy")
+  payoutsPaid          Payout[]           @relation("PayoutPaidBy")
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  @@index([role, status])
+}
+
+model BrandProfile {
+  id           String        @id @default(uuid()) @db.Uuid
+  userId       String        @unique @db.Uuid
+  brandName    String        @db.VarChar(160)
+  legalName    String?       @db.VarChar(240)
+  website      String?       @db.VarChar(500)
+  description  String?
+  logoUrl      String?       @db.VarChar(1000)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  offers       Offer[]
+  orderImports OrderImport[]
+  orders       Order[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model CreatorProfile {
+  id                     String                  @id @default(uuid()) @db.Uuid
+  userId                 String                  @unique @db.Uuid
+  displayName            String                  @db.VarChar(160)
+  description            String?
+  socialLinks            Json?
+  user                   User                    @relation(fields: [userId], references: [id], onDelete: Restrict)
+  applications           OfferApplication[]
+  affiliateRelationships AffiliateRelationship[]
+  clicks                 Click[]
+  commissions            Commission[]
+  ledgerEntries          LedgerEntry[]
+  payouts                Payout[]
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+}
+
+model Offer {
+  id                      String                  @id @default(uuid()) @db.Uuid
+  brandId                 String                  @db.Uuid
+  title                   String                  @db.VarChar(200)
+  description             String
+  productUrl              String?                 @db.VarChar(1000)
+  productPriceKopecks     Int
+  creatorCommissionBps    Int
+  platformCommissionBps   Int
+  promotionWithoutProduct PromotionWithoutProduct
+  status                  OfferStatus             @default(DRAFT)
+  category                String?                 @db.VarChar(120)
+  imageUrl                String?                 @db.VarChar(1000)
+  productRequirementSales Int                     @default(0)
+  allowedPromotionFormats String[]                @default([])
+  brand                   BrandProfile            @relation(fields: [brandId], references: [id], onDelete: Restrict)
+  creatorKit              CreatorKit?
+  applications            OfferApplication[]
+  affiliateRelationships  AffiliateRelationship[]
+  clicks                  Click[]
+  orders                  Order[]
+  commissions             Commission[]
+  createdAt               DateTime                @default(now())
+  updatedAt               DateTime                @updatedAt
+
+  @@index([brandId, status])
+  @@index([status, createdAt])
+}
+
+model CreatorKit {
+  id                      String                   @id @default(uuid()) @db.Uuid
+  offerId                 String                   @unique @db.Uuid
+  offer                   Offer                    @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  assets                  CreatorKitAsset[]
+  scenarios               CreatorKitScenario[]
+  facts                   CreatorKitFact[]
+  claims                  CreatorKitClaim[]
+  rules                   CreatorKitRule[]
+  publicationRequirements PublicationRequirements?
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+}
+
+model CreatorKitAsset {
+  id                        String                     @id @default(uuid()) @db.Uuid
+  creatorKitId              String                     @db.Uuid
+  title                     String                     @db.VarChar(200)
+  assetType                 CreatorKitAssetType
+  accessLevel               CreatorKitAccessLevel
+  status                    CreatorKitAssetStatus      @default(UPLOADING)
+  processingStatus          CreatorKitProcessingStatus @default(NOT_STARTED)
+  originalFileName          String                     @db.VarChar(255)
+  extension                 String                     @db.VarChar(16)
+  mimeType                  String                     @db.VarChar(120)
+  byteSize                  BigInt
+  storageObjectKey          String                     @unique @db.VarChar(1000)
+  previewObjectKey          String?                    @db.VarChar(1000)
+  editable                  Boolean                    @default(false)
+  textAllowed               Boolean                    @default(false)
+  paidAdsAllowed            Boolean                    @default(false)
+  approvalRequired          Boolean                    @default(false)
+  requiresAffiliateApproval Boolean                    @default(false)
+  expiresAt                 DateTime?
+  disabledAt                DateTime?
+  deletedAt                 DateTime?
+  creatorKit                CreatorKit                 @relation(fields: [creatorKitId], references: [id], onDelete: Restrict)
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+
+  @@index([creatorKitId, status, accessLevel])
+  @@index([expiresAt])
+}
+
+model CreatorKitScenario {
+  id                        String                    @id @default(uuid()) @db.Uuid
+  creatorKitId              String                    @db.Uuid
+  channel                   CreatorKitScenarioChannel
+  title                     String                    @db.VarChar(200)
+  idea                      String
+  accessLevel               CreatorKitAccessLevel     @default(DIGITAL)
+  requiresAffiliateApproval Boolean                   @default(false)
+  sortOrder                 Int                       @default(0)
+  creatorKit                CreatorKit                @relation(fields: [creatorKitId], references: [id], onDelete: Restrict)
+  createdAt                 DateTime                  @default(now())
+  updatedAt                 DateTime                  @updatedAt
+
+  @@index([creatorKitId, accessLevel, sortOrder])
+}
+
+model CreatorKitFact {
+  id           String             @id @default(uuid()) @db.Uuid
+  creatorKitId String             @db.Uuid
+  type         CreatorKitFactType
+  value        String
+  sortOrder    Int                @default(0)
+  creatorKit   CreatorKit         @relation(fields: [creatorKitId], references: [id], onDelete: Restrict)
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@unique([creatorKitId, type])
+  @@index([creatorKitId, sortOrder])
+}
+
+model CreatorKitClaim {
+  id           String              @id @default(uuid()) @db.Uuid
+  creatorKitId String              @db.Uuid
+  type         CreatorKitClaimType
+  value        String
+  sortOrder    Int                 @default(0)
+  creatorKit   CreatorKit          @relation(fields: [creatorKitId], references: [id], onDelete: Restrict)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  @@index([creatorKitId, type, sortOrder])
+}
+
+model CreatorKitRule {
+  id           String     @id @default(uuid()) @db.Uuid
+  creatorKitId String     @db.Uuid
+  value        String
+  sortOrder    Int        @default(0)
+  creatorKit   CreatorKit @relation(fields: [creatorKitId], references: [id], onDelete: Restrict)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([creatorKitId, sortOrder])
+}
+
+model PublicationRequirements {
+  id                String     @id @default(uuid()) @db.Uuid
+  creatorKitId      String     @unique @db.Uuid
+  mandatoryMentions String[]   @default([])
+  advertisingLabel  String?
+  hashtags          String[]   @default([])
+  brandMention      String?    @db.VarChar(200)
+  approvalRequired  Boolean    @default(false)
+  allowedPlatforms  String[]   @default([])
+  creatorKit        CreatorKit @relation(fields: [creatorKitId], references: [id], onDelete: Restrict)
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+}
+
+model OfferApplication {
+  id                    String                 @id @default(uuid()) @db.Uuid
+  offerId               String                 @db.Uuid
+  creatorId             String                 @db.Uuid
+  message               String?                @db.VarChar(2000)
+  status                OfferApplicationStatus @default(PENDING)
+  reviewedAt            DateTime?
+  reviewedByUserId      String?                @db.Uuid
+  offer                 Offer                  @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  creator               CreatorProfile         @relation(fields: [creatorId], references: [id], onDelete: Restrict)
+  reviewedBy            User?                  @relation("ApplicationReviewer", fields: [reviewedByUserId], references: [id], onDelete: Restrict)
+  affiliateRelationship AffiliateRelationship?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+
+  @@index([creatorId, status, createdAt])
+  @@index([offerId, status, createdAt])
+}
+
+model AffiliateRelationship {
+  id             String                      @id @default(uuid()) @db.Uuid
+  offerId        String                      @db.Uuid
+  creatorId      String                      @db.Uuid
+  applicationId  String                      @unique @db.Uuid
+  affiliateCode  String                      @unique @db.VarChar(64)
+  promoCode      String                      @unique @db.VarChar(12)
+  destinationUrl String                      @db.VarChar(2000)
+  status         AffiliateRelationshipStatus @default(ACTIVE)
+  activatedAt    DateTime                    @default(now())
+  pausedAt       DateTime?
+  revokedAt      DateTime?
+  offer          Offer                       @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  creator        CreatorProfile              @relation(fields: [creatorId], references: [id], onDelete: Restrict)
+  application    OfferApplication            @relation(fields: [applicationId], references: [id], onDelete: Restrict)
+  clicks         Click[]
+  orders         Order[]
+  commissions    Commission[]
+  importRows     OrderImportRow[]
+  createdAt      DateTime                    @default(now())
+  updatedAt      DateTime                    @updatedAt
+
+  @@index([creatorId, status, createdAt])
+  @@index([offerId, status, createdAt])
+}
+
+model Click {
+  id                      String                @id @default(uuid()) @db.Uuid
+  affiliateRelationshipId String                @db.Uuid
+  affiliateCode           String                @db.VarChar(64)
+  offerId                 String                @db.Uuid
+  creatorId               String                @db.Uuid
+  clickedAt               DateTime              @default(now())
+  landingUrl              String                @db.VarChar(2000)
+  referrer                String?               @db.VarChar(2000)
+  userAgent               String?               @db.VarChar(500)
+  ipHash                  String?               @db.VarChar(64)
+  deduplicationKey        String?               @unique @db.VarChar(64)
+  affiliateRelationship   AffiliateRelationship @relation(fields: [affiliateRelationshipId], references: [id], onDelete: Restrict)
+  offer                   Offer                 @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  creator                 CreatorProfile        @relation(fields: [creatorId], references: [id], onDelete: Restrict)
+  orders                  Order[]
+  importRows              OrderImportRow[]
+  createdAt               DateTime              @default(now())
+
+  @@index([affiliateRelationshipId, clickedAt])
+  @@index([creatorId, clickedAt])
+  @@index([offerId, clickedAt])
+}
+
+model OrderImport {
+  id               String            @id @default(uuid()) @db.Uuid
+  brandId          String            @db.Uuid
+  originalFileName String            @db.VarChar(255)
+  status           OrderImportStatus @default(UPLOADED)
+  totalRows        Int               @default(0)
+  validRows        Int               @default(0)
+  invalidRows      Int               @default(0)
+  duplicateRows    Int               @default(0)
+  errorSummary     Json?
+  brand            BrandProfile      @relation(fields: [brandId], references: [id], onDelete: Restrict)
+  rows             OrderImportRow[]
+  orders           Order[]
+  createdAt        DateTime          @default(now())
+  completedAt      DateTime?
+
+  @@index([brandId, createdAt])
+  @@index([brandId, status])
+}
+
+model OrderImportRow {
+  id                               String                 @id @default(uuid()) @db.Uuid
+  orderImportId                    String                 @db.Uuid
+  rowNumber                        Int
+  status                           OrderImportRowStatus
+  action                           OrderImportAction
+  externalOrderId                  String?                @db.VarChar(160)
+  orderDate                        DateTime?
+  amountKopecks                    Int?
+  returnedAmountKopecks            Int?
+  currency                         String?                @db.Char(3)
+  orderStatus                      OrderStatus?
+  affiliateCode                    String?                @db.VarChar(64)
+  promoCode                        String?                @db.VarChar(12)
+  clickId                          String?                @db.Uuid
+  offerId                          String?                @db.Uuid
+  attributedRelationshipId         String?                @db.Uuid
+  attributionSource                AttributionSource?
+  existingOrderId                  String?                @db.Uuid
+  previewCreatorCommissionKopecks  Int?
+  previewPlatformCommissionKopecks Int?
+  errors                           String[]               @default([])
+  warnings                         String[]               @default([])
+  rawData                          Json
+  orderImport                      OrderImport            @relation(fields: [orderImportId], references: [id], onDelete: Restrict)
+  attributedRelationship           AffiliateRelationship? @relation(fields: [attributedRelationshipId], references: [id], onDelete: Restrict)
+  click                            Click?                 @relation(fields: [clickId], references: [id], onDelete: Restrict)
+  existingOrder                    Order?                 @relation("ExistingOrderPreview", fields: [existingOrderId], references: [id], onDelete: Restrict)
+  createdAt                        DateTime               @default(now())
+
+  @@unique([orderImportId, rowNumber])
+  @@index([orderImportId, status, action])
+  @@index([attributedRelationshipId])
+  @@index([existingOrderId])
+}
+
+model Order {
+  id                      String                 @id @default(uuid()) @db.Uuid
+  brandId                 String                 @db.Uuid
+  offerId                 String                 @db.Uuid
+  orderImportId           String                 @db.Uuid
+  affiliateRelationshipId String?                @db.Uuid
+  externalOrderId         String                 @db.VarChar(160)
+  orderDate               DateTime
+  amountKopecks           Int
+  returnedAmountKopecks   Int                    @default(0)
+  currency                String                 @db.Char(3)
+  status                  OrderStatus
+  attributionSource       AttributionSource
+  affiliateCode           String?                @db.VarChar(64)
+  promoCode               String?                @db.VarChar(12)
+  clickId                 String?                @db.Uuid
+  creatorCommissionBps    Int
+  platformCommissionBps   Int
+  brand                   BrandProfile           @relation(fields: [brandId], references: [id], onDelete: Restrict)
+  offer                   Offer                  @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  orderImport             OrderImport            @relation(fields: [orderImportId], references: [id], onDelete: Restrict)
+  affiliateRelationship   AffiliateRelationship? @relation(fields: [affiliateRelationshipId], references: [id], onDelete: Restrict)
+  click                   Click?                 @relation(fields: [clickId], references: [id], onDelete: Restrict)
+  commission              Commission?
+  previewRows             OrderImportRow[]       @relation("ExistingOrderPreview")
+  importedAt              DateTime               @default(now())
+  createdAt               DateTime               @default(now())
+  updatedAt               DateTime               @updatedAt
+  ledgerEntries           LedgerEntry[]
+
+  @@unique([brandId, externalOrderId])
+  @@index([brandId, orderDate])
+  @@index([offerId, orderDate])
+  @@index([affiliateRelationshipId, orderDate])
+  @@index([clickId])
+}
+
+model Commission {
+  id                      String                @id @default(uuid()) @db.Uuid
+  orderId                 String                @unique @db.Uuid
+  affiliateRelationshipId String                @db.Uuid
+  creatorId               String                @db.Uuid
+  offerId                 String                @db.Uuid
+  payoutId                String?               @db.Uuid
+  creatorAmountKopecks    Int
+  platformAmountKopecks   Int
+  debtAmountKopecks       Int                   @default(0)
+  hasPostPayoutDebt       Boolean               @default(false)
+  status                  CommissionStatus
+  holdUntil               DateTime?
+  order                   Order                 @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  affiliateRelationship   AffiliateRelationship @relation(fields: [affiliateRelationshipId], references: [id], onDelete: Restrict)
+  creator                 CreatorProfile        @relation(fields: [creatorId], references: [id], onDelete: Restrict)
+  offer                   Offer                 @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  payout                  Payout?               @relation(fields: [payoutId], references: [id], onDelete: Restrict)
+  ledgerEntries           LedgerEntry[]
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+
+  @@index([creatorId, status, holdUntil])
+  @@index([offerId, status])
+  @@index([payoutId])
+  @@index([hasPostPayoutDebt, updatedAt])
+}
+
+model LedgerEntry {
+  id            String          @id @default(uuid()) @db.Uuid
+  commissionId  String          @db.Uuid
+  creatorId     String          @db.Uuid
+  orderId       String          @db.Uuid
+  payoutId      String?         @db.Uuid
+  type          LedgerEntryType
+  amountKopecks Int
+  eventKey      String          @unique @db.VarChar(200)
+  metadata      Json?
+  commission    Commission      @relation(fields: [commissionId], references: [id], onDelete: Restrict)
+  creator       CreatorProfile  @relation(fields: [creatorId], references: [id], onDelete: Restrict)
+  order         Order           @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  payout        Payout?         @relation(fields: [payoutId], references: [id], onDelete: Restrict)
+  createdAt     DateTime        @default(now())
+
+  @@index([creatorId, createdAt])
+  @@index([commissionId, createdAt])
+  @@index([payoutId])
+}
+
+model Payout {
+  id               String         @id @default(uuid()) @db.Uuid
+  creatorId        String         @db.Uuid
+  amountKopecks    BigInt
+  status           PayoutStatus   @default(DRAFT)
+  createdByUserId  String         @db.Uuid
+  approvedByUserId String?        @db.Uuid
+  paidByUserId     String?        @db.Uuid
+  reference        String?        @db.VarChar(255)
+  creator          CreatorProfile @relation(fields: [creatorId], references: [id], onDelete: Restrict)
+  createdBy        User           @relation("PayoutCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  approvedBy       User?          @relation("PayoutApprovedBy", fields: [approvedByUserId], references: [id], onDelete: Restrict)
+  paidBy           User?          @relation("PayoutPaidBy", fields: [paidByUserId], references: [id], onDelete: Restrict)
+  commissions      Commission[]
+  ledgerEntries    LedgerEntry[]
+  createdAt        DateTime       @default(now())
+  approvedAt       DateTime?
+  paidAt           DateTime?
+
+  @@index([creatorId, status, createdAt])
+  @@index([status, createdAt])
+}
+
+model AuthSession {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @db.Uuid
+  refreshTokenHash String
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  lastUsedAt       DateTime?
+  userAgent        String?   @db.VarChar(500)
+  ipAddress        String?   @db.VarChar(64)
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+}

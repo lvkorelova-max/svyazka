@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Build and test output
+dist/
+coverage/
+.nyc_output/
+.cache/
+.vite/
+*.tsbuildinfo
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs and runtime files
+*.log
+logs/
+*.pid
+*.seed
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local archives and backups
+*.bak
+*.tmp
+*.zip
+*.tar
+*.tar.gz
