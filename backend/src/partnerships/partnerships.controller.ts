@@ -14,6 +14,7 @@ import { UserRole } from '@prisma/client';
 import { Request, Response } from 'express';
 import { AuthenticatedUser } from '../auth/auth.types';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { RateLimit } from '../common/decorators/rate-limit.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { AccessTokenGuard } from '../common/guards/access-token.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -153,6 +154,7 @@ export class RedirectController {
   constructor(private readonly partnerships: PartnershipsService) {}
 
   @Get(':affiliateCode')
+  @RateLimit({ scope: 'affiliate-redirect', limit: 120, windowSeconds: 60 })
   async redirect(
     @Param('affiliateCode') affiliateCode: string,
     @Req() request: Request,

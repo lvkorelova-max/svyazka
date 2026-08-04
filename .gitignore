@@ -13,6 +13,7 @@ coverage/
 .env
 .env.*
 !.env.example
+!.env.production.example
 *.local
 
 # Logs and runtime files
@@ -32,6 +33,7 @@ Thumbs.db
 # Local archives and backups
 *.bak
 *.tmp
+.backups/
 *.zip
 *.tar
 *.tar.gz

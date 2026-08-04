@@ -7,6 +7,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import {
   AffiliateRelationshipStatus,
+  BrandVerificationStatus,
   CreatorKitAccessLevel,
   CreatorKitAssetStatus,
   CreatorKitAssetType,
@@ -160,6 +161,7 @@ export class CreatorKitService {
   }
 
   async initUpload(userId: string, offerId: string, dto: InitCreatorKitUploadDto) {
+    await this.assertVerifiedBrand(userId);
     const offer = await this.getOwnedOffer(userId, offerId);
     const kit = await this.ensureKit(offer.id);
     const count = await this.prisma.creatorKitAsset.count({
@@ -200,6 +202,7 @@ export class CreatorKitService {
   }
 
   async completeUpload(userId: string, offerId: string, assetId: string) {
+    await this.assertVerifiedBrand(userId);
     const { asset } = await this.getOwnedAsset(userId, offerId, assetId);
     if (asset.status === CreatorKitAssetStatus.READY) return this.publicAsset(asset);
     if (
@@ -319,6 +322,19 @@ export class CreatorKitService {
     const creator = await this.prisma.creatorProfile.findUnique({ where: { userId } });
     if (!creator) throw new ForbiddenException('Профиль креатора не найден');
     return creator;
+  }
+
+  private async assertVerifiedBrand(userId: string) {
+    const brand = await this.prisma.brandProfile.findUnique({
+      where: { userId },
+      select: { verificationStatus: true },
+    });
+    if (!brand) throw new ForbiddenException('Профиль бренда не найден');
+    if (brand.verificationStatus !== BrandVerificationStatus.VERIFIED) {
+      throw new ForbiddenException(
+        'Загрузка файлов доступна только брендам, подтверждённым администратором',
+      );
+    }
   }
 
   private async ensureKit(offerId: string) {

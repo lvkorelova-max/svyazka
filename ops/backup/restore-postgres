@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+source /opt/backup/common.sh
+
+require_env RESTIC_REPOSITORY RESTIC_PASSWORD TARGET_DATABASE_URL TARGET_DATABASE_NAME RESTORE_CONFIRMATION
+if [ "$RESTORE_CONFIRMATION" != "RESTORE POSTGRES $TARGET_DATABASE_NAME" ]; then
+  printf 'Restore confirmation did not match target database\n' >&2
+  exit 1
+fi
+if [ "${RESTORE_ENVIRONMENT:-production}" = "production" ] &&
+   [ "${ALLOW_PRODUCTION_RESTORE:-false}" != "true" ]; then
+  printf 'Production restore requires ALLOW_PRODUCTION_RESTORE=true\n' >&2
+  exit 1
+fi
+
+restore_dir="/restore/postgres"
+rm -rf "$restore_dir"
+mkdir -p "$restore_dir"
+restic unlock --remove-all >/dev/null
+restic restore "${POSTGRES_SNAPSHOT_ID:-latest}" --tag postgres --target "$restore_dir"
+dump_path="$(find "$restore_dir" -name postgres.dump -type f | head -n 1)"
+checksum_path="$(find "$restore_dir" -name SHA256SUMS -type f | head -n 1)"
+test -n "$dump_path"
+test -n "$checksum_path"
+(
+  cd "$(dirname "$checksum_path")"
+  sha256sum --check SHA256SUMS
+  pg_restore --list postgres.dump >/dev/null
+)
+pg_restore --clean --if-exists --no-owner --no-acl --dbname "$(libpq_url "$TARGET_DATABASE_URL")" "$dump_path"
+printf 'PostgreSQL restore completed for %s\n' "$TARGET_DATABASE_NAME"

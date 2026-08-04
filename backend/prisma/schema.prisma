@@ -164,39 +164,76 @@ enum PayoutStatus {
   CANCELLED
 }
 
+enum BackupKind {
+  POSTGRES
+  MINIO
+}
+
+enum BackupRunStatus {
+  STARTED
+  SUCCESS
+  FAILED
+}
+
+enum BrandVerificationStatus {
+  UNVERIFIED
+  VERIFIED
+}
+
 model User {
   id                   String             @id @default(uuid()) @db.Uuid
   email                String             @unique @db.VarChar(320)
   passwordHash         String
   role                 UserRole
   status               UserStatus         @default(ACTIVE)
+  failedLoginAttempts  Int                @default(0)
+  lockedUntil          DateTime?
+  sessionVersion       Int                @default(0)
+  mustChangePassword   Boolean            @default(false)
+  passwordChangedAt    DateTime?
+  mfaEnabled           Boolean            @default(false)
+  mfaSecretEncrypted   String?
+  mfaEnrolledAt        DateTime?
   brandProfile         BrandProfile?
   creatorProfile       CreatorProfile?
   sessions             AuthSession[]
+  passwordResetTokens  PasswordResetToken[]
+  adminRecoveryCodes   AdminRecoveryCode[]
+  auditLogs             AuditLog[]         @relation("AuditActor")
   reviewedApplications OfferApplication[] @relation("ApplicationReviewer")
   payoutsCreated       Payout[]           @relation("PayoutCreatedBy")
   payoutsApproved      Payout[]           @relation("PayoutApprovedBy")
   payoutsPaid          Payout[]           @relation("PayoutPaidBy")
+  payoutsCancelled     Payout[]           @relation("PayoutCancelledBy")
+  brandsVerified       BrandProfile[]     @relation("BrandVerifier")
   createdAt            DateTime           @default(now())
   updatedAt            DateTime           @updatedAt
 
   @@index([role, status])
+  @@index([lockedUntil])
 }
 
 model BrandProfile {
-  id           String        @id @default(uuid()) @db.Uuid
-  userId       String        @unique @db.Uuid
-  brandName    String        @db.VarChar(160)
-  legalName    String?       @db.VarChar(240)
-  website      String?       @db.VarChar(500)
-  description  String?
-  logoUrl      String?       @db.VarChar(1000)
-  user         User          @relation(fields: [userId], references: [id], onDelete: Restrict)
-  offers       Offer[]
-  orderImports OrderImport[]
-  orders       Order[]
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  id                 String                  @id @default(uuid()) @db.Uuid
+  userId             String                  @unique @db.Uuid
+  brandName          String                  @db.VarChar(160)
+  legalName          String?                 @db.VarChar(240)
+  website            String?                 @db.VarChar(500)
+  description        String?
+  logoUrl            String?                 @db.VarChar(1000)
+  verificationStatus BrandVerificationStatus @default(UNVERIFIED)
+  verifiedAt         DateTime?
+  verifiedByUserId   String?                 @db.Uuid
+  user               User                    @relation(fields: [userId], references: [id], onDelete: Restrict)
+  verifiedBy         User?                   @relation("BrandVerifier", fields: [verifiedByUserId], references: [id], onDelete: Restrict)
+  offers             Offer[]
+  orderImports       OrderImport[]
+  orders             Order[]
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+
+  @@index([verificationStatus, createdAt])
+  @@index([verifiedByUserId])
 }
 
 model CreatorProfile {
@@ -466,8 +503,10 @@ model OrderImportRow {
   attributedRelationshipId         String?                @db.Uuid
   attributionSource                AttributionSource?
   existingOrderId                  String?                @db.Uuid
-  previewCreatorCommissionKopecks  Int?
-  previewPlatformCommissionKopecks Int?
+  creatorCommissionBpsSnapshot     Int?
+  platformCommissionBpsSnapshot    Int?
+  previewCreatorAmountKopecks      Int?
+  previewPlatformAmountKopecks     Int?
   errors                           String[]               @default([])
   warnings                         String[]               @default([])
   rawData                          Json
@@ -577,25 +616,31 @@ model Payout {
   createdByUserId  String         @db.Uuid
   approvedByUserId String?        @db.Uuid
   paidByUserId     String?        @db.Uuid
+  cancelledByUserId String?       @db.Uuid
   reference        String?        @db.VarChar(255)
   creator          CreatorProfile @relation(fields: [creatorId], references: [id], onDelete: Restrict)
   createdBy        User           @relation("PayoutCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
   approvedBy       User?          @relation("PayoutApprovedBy", fields: [approvedByUserId], references: [id], onDelete: Restrict)
   paidBy           User?          @relation("PayoutPaidBy", fields: [paidByUserId], references: [id], onDelete: Restrict)
+  cancelledBy      User?          @relation("PayoutCancelledBy", fields: [cancelledByUserId], references: [id], onDelete: Restrict)
   commissions      Commission[]
   ledgerEntries    LedgerEntry[]
   createdAt        DateTime       @default(now())
   approvedAt       DateTime?
   paidAt           DateTime?
+  cancelledAt      DateTime?
+  cancellationReason String?      @db.VarChar(500)
 
   @@index([creatorId, status, createdAt])
   @@index([status, createdAt])
+  @@index([cancelledByUserId])
 }
 
 model AuthSession {
   id               String    @id @default(uuid()) @db.Uuid
   userId           String    @db.Uuid
   refreshTokenHash String
+  sessionVersion   Int       @default(0)
   expiresAt        DateTime
   revokedAt        DateTime?
   lastUsedAt       DateTime?
@@ -607,4 +652,59 @@ model AuthSession {
 
   @@index([userId, revokedAt])
   @@index([expiresAt])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  tokenHash String   @unique @db.Char(64)
+  expiresAt DateTime
+  usedAt    DateTime?
+  user      User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([expiresAt, usedAt])
+}
+
+model AdminRecoveryCode {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  codeHash  String   @unique @db.Char(64)
+  usedAt    DateTime?
+  user      User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  createdAt DateTime @default(now())
+
+  @@index([userId, usedAt])
+}
+
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  actorUserId String   @db.Uuid
+  action      String   @db.VarChar(120)
+  entityType  String   @db.VarChar(80)
+  entityId    String   @db.VarChar(160)
+  requestId   String   @db.VarChar(100)
+  metadata    Json?
+  actor       User     @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  createdAt   DateTime @default(now())
+
+  @@index([actorUserId, createdAt])
+  @@index([entityType, entityId, createdAt])
+  @@index([action, createdAt])
+}
+
+model BackupRun {
+  id           String          @id @default(uuid()) @db.Uuid
+  kind         BackupKind
+  status       BackupRunStatus @default(STARTED)
+  repository   String          @db.VarChar(500)
+  snapshotId   String?         @db.VarChar(160)
+  manifest     Json?
+  errorMessage String?         @db.VarChar(1000)
+  startedAt    DateTime        @default(now())
+  completedAt  DateTime?
+
+  @@index([kind, startedAt])
+  @@index([status, startedAt])
 }

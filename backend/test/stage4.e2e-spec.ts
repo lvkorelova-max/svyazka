@@ -58,7 +58,11 @@ describe('Stage 4 affiliate finance end-to-end', () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     const instance = moduleRef.createNestApplication();
     instance.setGlobalPrefix('api', {
-      exclude: [{ path: 'go/:affiliateCode', method: RequestMethod.GET }],
+      exclude: [
+        { path: 'go/:affiliateCode', method: RequestMethod.GET },
+        { path: 'health/live', method: RequestMethod.GET },
+        { path: 'health/ready', method: RequestMethod.GET },
+      ],
     });
     instance.use(cookieParser());
     instance.useGlobalPipes(
@@ -103,6 +107,9 @@ describe('Stage 4 affiliate finance end-to-end', () => {
     app = await createApplication();
     prisma = app.get(PrismaService);
     await prisma.authSession.deleteMany();
+    await prisma.passwordResetToken.deleteMany();
+    await prisma.adminRecoveryCode.deleteMany();
+    await prisma.auditLog.deleteMany();
     await prisma.ledgerEntry.deleteMany();
     await prisma.commission.deleteMany();
     await prisma.payout.deleteMany();

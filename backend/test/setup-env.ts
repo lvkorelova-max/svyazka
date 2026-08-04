@@ -25,6 +25,10 @@ process.env.CLICK_IP_HASH_SALT = 'test_only_click_ip_salt_at_least_32_chars';
 process.env.CLICK_RATE_LIMIT_PER_MINUTE = '60';
 process.env.CLICK_DEDUPE_WINDOW_SECONDS = '5';
 process.env.COMMISSION_HOLD_DAYS = '14';
+process.env.ADMIN_MFA_REQUIRED = 'false';
+process.env.PASSWORD_RESET_EXPOSE_TOKEN = 'true';
+process.env.MFA_ENCRYPTION_KEY = 'test_only_mfa_encryption_key_at_least_32_chars';
+process.env.MFA_RECOVERY_CODE_SALT = 'test_only_recovery_code_salt_at_least_32_chars';
 process.env.S3_ENDPOINT_INTERNAL =
   process.env.S3_ENDPOINT_INTERNAL ?? 'http://localhost:9000';
 process.env.S3_ENDPOINT_PUBLIC =

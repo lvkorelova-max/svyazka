@@ -1,0 +1,38 @@
+#!/bin/sh
+set -eu
+
+root_dir=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
+timestamp=$(date -u +%Y%m%dT%H%M%SZ)
+backup_dir="${PRE_MIGRATION_BACKUP_DIR:-$root_dir/.backups/pre-migration/$timestamp}"
+dump_file="$backup_dir/postgres.dump"
+manifest_file="$backup_dir/manifest.txt"
+checksum_file="$backup_dir/SHA256SUMS"
+list_file="$backup_dir/pg_restore.list"
+
+mkdir -p "$backup_dir"
+
+cd "$root_dir"
+docker compose exec -T db sh -c \
+  'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump --format=custom --no-owner --no-acl --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' \
+  > "$dump_file"
+
+docker compose exec -T db pg_restore --list < "$dump_file" > "$list_file"
+test -s "$list_file"
+
+(
+  cd "$backup_dir"
+  shasum -a 256 postgres.dump pg_restore.list > SHA256SUMS
+  shasum -a 256 -c SHA256SUMS
+)
+
+{
+  printf 'type=pre-migration-postgresql\n'
+  printf 'created_at=%s\n' "$timestamp"
+  printf 'git_commit=%s\n' "$(git rev-parse HEAD)"
+  printf 'migration=20260803000000_financial_hardening\n'
+  printf 'dump_format=postgresql-custom\n'
+  printf 'rollback_document=docs/operations/financial-migration-rollback.md\n'
+} > "$manifest_file"
+
+test -s "$manifest_file"
+printf '%s\n' "$backup_dir"

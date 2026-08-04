@@ -26,6 +26,7 @@ import {
 } from './dto/list-finance-query.dto';
 import { CsvRecord, parseCsv } from './csv';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../audit/audit.service';
 
 type CsvUpload = {
   buffer: Buffer;
@@ -62,6 +63,7 @@ export class FinanceService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly audit: AuditService,
   ) {}
 
   async createOrderImport(userId: string, file: CsvUpload | undefined, maxBytes: number) {
@@ -127,7 +129,20 @@ export class FinanceService {
           },
         }),
       ]);
-      return this.getOrderImportPreview(userId, orderImport.id);
+      const preview = await this.getOrderImportPreview(userId, orderImport.id);
+      await this.audit.record({
+        actorUserId: userId,
+        action: 'ORDER_IMPORT_PREVIEW_CREATED',
+        entityType: 'OrderImport',
+        entityId: orderImport.id,
+        metadata: {
+          totalRows: preview.totalRows,
+          validRows: preview.validRows,
+          invalidRows: preview.invalidRows,
+          duplicateRows: preview.duplicateRows,
+        },
+      });
+      return preview;
     } catch (error) {
       await this.prisma.orderImport.update({
         where: { id: orderImport.id },
@@ -210,8 +225,8 @@ export class FinanceService {
                 affiliateCode: row.affiliateCode,
                 promoCode: row.promoCode,
                 clickId: row.clickId,
-                creatorCommissionBps: offer.creatorCommissionBps,
-                platformCommissionBps: offer.platformCommissionBps,
+                creatorCommissionBps: row.creatorCommissionBpsSnapshot!,
+                platformCommissionBps: row.platformCommissionBpsSnapshot!,
               },
             });
             created += 1;
@@ -231,6 +246,27 @@ export class FinanceService {
                 importedAt: new Date(),
               },
             });
+            if (
+              existing.status !== row.orderStatus ||
+              existing.returnedAmountKopecks !== (row.returnedAmountKopecks ?? 0)
+            ) {
+              await tx.auditLog.create({
+                data: {
+                  actorUserId: userId,
+                  action: 'ORDER_STATUS_CHANGED',
+                  entityType: 'Order',
+                  entityId: existing.id,
+                  requestId: this.audit.requestId(),
+                  metadata: {
+                    previousStatus: existing.status,
+                    nextStatus: row.orderStatus,
+                    previousReturnedAmountKopecks: existing.returnedAmountKopecks,
+                    nextReturnedAmountKopecks: row.returnedAmountKopecks ?? 0,
+                    orderImportId: orderImport.id,
+                  },
+                },
+              });
+            }
             updated += 1;
           } else {
             continue;
@@ -241,6 +277,16 @@ export class FinanceService {
         await tx.orderImport.update({
           where: { id: orderImport.id },
           data: { status: OrderImportStatus.IMPORTED, completedAt: new Date() },
+        });
+        await tx.auditLog.create({
+          data: {
+            actorUserId: userId,
+            action: 'ORDER_IMPORT_CONFIRMED',
+            entityType: 'OrderImport',
+            entityId: orderImport.id,
+            requestId: this.audit.requestId(),
+            metadata: { created, updated },
+          },
         });
         return { created, updated };
       },
@@ -520,6 +566,16 @@ export class FinanceService {
         if (reserved.count !== uniqueIds.length) {
           throw new ConflictException('Комиссии были изменены во время создания выплаты');
         }
+        await tx.auditLog.create({
+          data: {
+            actorUserId: adminUserId,
+            action: 'PAYOUT_CREATED',
+            entityType: 'Payout',
+            entityId: payout.id,
+            requestId: this.audit.requestId(),
+            metadata: { amountKopecks: amount.toString(), commissionsCount: uniqueIds.length },
+          },
+        });
         return tx.payout.findUnique({
           where: { id: payout.id },
           include: { commissions: true, creator: true },
@@ -538,13 +594,26 @@ export class FinanceService {
     if (payout.status !== PayoutStatus.DRAFT) {
       throw new ConflictException('Выплату нельзя подтвердить в текущем статусе');
     }
-    return this.prisma.payout.update({
-      where: { id: payout.id },
-      data: {
-        status: PayoutStatus.APPROVED,
-        approvedAt: new Date(),
-        approvedByUserId: adminUserId,
-      },
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.payout.update({
+        where: { id: payout.id },
+        data: {
+          status: PayoutStatus.APPROVED,
+          approvedAt: new Date(),
+          approvedByUserId: adminUserId,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorUserId: adminUserId,
+          action: 'PAYOUT_APPROVED',
+          entityType: 'Payout',
+          entityId: payout.id,
+          requestId: this.audit.requestId(),
+          metadata: { amountKopecks: payout.amountKopecks.toString() },
+        },
+      });
+      return updated;
     });
   }
 
@@ -595,7 +664,7 @@ export class FinanceService {
           where: { payoutId: payout.id, status: CommissionStatus.AVAILABLE },
           data: { status: CommissionStatus.PAID },
         });
-        return tx.payout.update({
+        const updated = await tx.payout.update({
           where: { id: payout.id },
           data: {
             status: PayoutStatus.PAID,
@@ -604,12 +673,77 @@ export class FinanceService {
           },
           include: { commissions: true, creator: true },
         });
+        await tx.auditLog.create({
+          data: {
+            actorUserId: adminUserId,
+            action: 'PAYOUT_MARKED_PAID',
+            entityType: 'Payout',
+            entityId: payout.id,
+            requestId: this.audit.requestId(),
+            metadata: { amountKopecks: payout.amountKopecks.toString() },
+          },
+        });
+        return updated;
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   }
 
-  async releaseHold() {
+  async cancelPayout(adminUserId: string, payoutId: string, reason?: string) {
+    return this.prisma.$transaction(
+      async (tx) => {
+        const payout = await tx.payout.findUnique({
+          where: { id: payoutId },
+          include: { commissions: true, creator: true },
+        });
+        if (!payout) throw new NotFoundException('Выплата не найдена');
+        if (payout.status === PayoutStatus.CANCELLED) return payout;
+        if (payout.status === PayoutStatus.PAID) {
+          throw new ConflictException('Выплаченную выплату отменить нельзя');
+        }
+        if (![PayoutStatus.DRAFT, PayoutStatus.APPROVED].includes(payout.status)) {
+          throw new ConflictException('Выплату нельзя отменить в текущем статусе');
+        }
+        const payoutEntries = await tx.ledgerEntry.count({
+          where: { payoutId: payout.id, type: LedgerEntryType.PAYOUT },
+        });
+        if (payoutEntries > 0) {
+          throw new ConflictException('Выплата уже содержит записи ledger');
+        }
+        await tx.commission.updateMany({
+          where: {
+            payoutId: payout.id,
+            status: CommissionStatus.AVAILABLE,
+          },
+          data: { payoutId: null },
+        });
+        const updated = await tx.payout.update({
+          where: { id: payout.id },
+          data: {
+            status: PayoutStatus.CANCELLED,
+            cancelledAt: new Date(),
+            cancelledByUserId: adminUserId,
+            cancellationReason: reason?.trim() || null,
+          },
+          include: { commissions: true, creator: true },
+        });
+        await tx.auditLog.create({
+          data: {
+            actorUserId: adminUserId,
+            action: 'PAYOUT_CANCELLED',
+            entityType: 'Payout',
+            entityId: payout.id,
+            requestId: this.audit.requestId(),
+            metadata: { previousStatus: payout.status, reason: reason?.trim() || null },
+          },
+        });
+        return updated;
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
+  async releaseHold(adminUserId: string) {
     const result = await this.prisma.commission.updateMany({
       where: {
         status: CommissionStatus.HOLD,
@@ -617,6 +751,13 @@ export class FinanceService {
         payoutId: null,
       },
       data: { status: CommissionStatus.AVAILABLE },
+    });
+    await this.audit.record({
+      actorUserId: adminUserId,
+      action: 'COMMISSION_HOLD_RELEASED',
+      entityType: 'Commission',
+      entityId: 'batch',
+      metadata: { released: result.count },
     });
     return { released: result.count };
   }
@@ -652,6 +793,7 @@ export class FinanceService {
       existingOrders.map((order) => [order.externalOrderId, order]),
     );
 
+    const seenExternalIds = new Map<string, string>();
     return records.map((record, index) => {
       const errors: string[] = [];
       const warnings: string[] = [];
@@ -796,6 +938,31 @@ export class FinanceService {
         }
       }
 
+      if (externalOrderId) {
+        const fingerprint = JSON.stringify({
+          orderDate: orderDate?.toISOString() ?? null,
+          amountKopecks,
+          returnedAmountKopecks,
+          currency,
+          orderStatus: orderStatus ?? null,
+          offerId: offerId ?? null,
+          relationshipId: selected?.relationship.id ?? null,
+        });
+        const firstFingerprint = seenExternalIds.get(externalOrderId);
+        if (firstFingerprint !== undefined) {
+          action = OrderImportAction.SKIP;
+          if (firstFingerprint === fingerprint) {
+            rowStatus = OrderImportRowStatus.DUPLICATE;
+            warnings.push('Повтор external_order_id внутри текущего CSV');
+          } else {
+            rowStatus = OrderImportRowStatus.CONFLICT;
+            errors.push('external_order_id повторяется с другими данными внутри текущего CSV');
+          }
+        } else {
+          seenExternalIds.set(externalOrderId, fingerprint);
+        }
+      }
+
       const bps =
         existing ??
         (offer
@@ -826,11 +993,13 @@ export class FinanceService {
         attributedRelationshipId: selected?.relationship.id ?? null,
         attributionSource: selected?.source ?? AttributionSource.UNATTRIBUTED,
         existingOrderId: existing?.id ?? null,
-        previewCreatorCommissionKopecks:
+        creatorCommissionBpsSnapshot: bps?.creatorCommissionBps ?? null,
+        platformCommissionBpsSnapshot: bps?.platformCommissionBps ?? null,
+        previewCreatorAmountKopecks:
           selected && bps
             ? this.calculateCommission(commissionBase, bps.creatorCommissionBps)
             : 0,
-        previewPlatformCommissionKopecks:
+        previewPlatformAmountKopecks:
           selected && bps
             ? this.calculateCommission(commissionBase, bps.platformCommissionBps)
             : 0,
@@ -931,7 +1100,24 @@ export class FinanceService {
         : current.creatorAmountKopecks;
     const creatorDelta = creatorTarget - currentCreatorNet;
     const platformDelta = platformTarget - current.platformAmountKopecks;
-    if (creatorDelta < 0) {
+    const ledgerAmounts = await tx.ledgerEntry.findMany({
+      where: {
+        commissionId: current.id,
+        type: { in: [LedgerEntryType.ACCRUAL, LedgerEntryType.REVERSAL] },
+      },
+      select: { type: true, amountKopecks: true },
+    });
+    const accrued = ledgerAmounts
+      .filter((entry) => entry.type === LedgerEntryType.ACCRUAL)
+      .reduce((sum, entry) => sum + entry.amountKopecks, 0);
+    const reversed = ledgerAmounts
+      .filter((entry) => entry.type === LedgerEntryType.REVERSAL)
+      .reduce((sum, entry) => sum + -entry.amountKopecks, 0);
+    const reversibleBalance = Math.max(0, accrued - reversed);
+    const reversalAmount = creatorDelta < 0
+      ? Math.min(-creatorDelta, reversibleBalance)
+      : 0;
+    if (reversalAmount > 0) {
       await tx.ledgerEntry.upsert({
         where: { eventKey: `order:${order.id}:reversal:${eventId}` },
         update: {},
@@ -940,7 +1126,7 @@ export class FinanceService {
           creatorId: current.creatorId,
           orderId: order.id,
           type: LedgerEntryType.REVERSAL,
-          amountKopecks: creatorDelta,
+          amountKopecks: -reversalAmount,
           eventKey: `order:${order.id}:reversal:${eventId}`,
           metadata: {
             platformAmountKopecks: platformDelta,
@@ -951,8 +1137,8 @@ export class FinanceService {
       });
     }
     const postPayoutDebt =
-      current.status === CommissionStatus.PAID && creatorDelta < 0
-        ? current.debtAmountKopecks + -creatorDelta
+      current.status === CommissionStatus.PAID && reversalAmount > 0
+        ? current.debtAmountKopecks + reversalAmount
         : current.debtAmountKopecks;
     await tx.commission.update({
       where: { id: current.id },

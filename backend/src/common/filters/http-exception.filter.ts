@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Request, Response } from 'express';
+import { RequestContext } from '../request-context';
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
@@ -31,6 +32,22 @@ export class HttpExceptionFilter implements ExceptionFilter {
       message,
       path: request.url,
       timestamp: new Date().toISOString(),
+      requestId: RequestContext.requestId(),
     });
+
+    if (status >= 500) {
+      process.stderr.write(
+        `${JSON.stringify({
+          timestamp: new Date().toISOString(),
+          level: 'error',
+          event: 'request_failed',
+          requestId: RequestContext.requestId(),
+          method: request.method,
+          path: request.url,
+          statusCode: status,
+          error: exception instanceof Error ? exception.name : 'UnknownError',
+        })}\n`,
+      );
+    }
   }
 }

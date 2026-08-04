@@ -19,11 +19,24 @@ export class AccessTokenGuard implements CanActivate {
 
     try {
       const payload = await this.jwt.verifyAsync<AccessTokenPayload>(header.slice(7));
+      if (payload.tokenType !== 'access') throw new UnauthorizedException('Некорректный токен');
       const user = await this.prisma.user.findUnique({
         where: { id: payload.sub },
-        select: { id: true, email: true, role: true, status: true },
+        select: {
+          id: true,
+          email: true,
+          role: true,
+          status: true,
+          sessionVersion: true,
+          mustChangePassword: true,
+          mfaEnabled: true,
+        },
       });
-      if (!user || user.status !== UserStatus.ACTIVE) {
+      if (
+        !user ||
+        user.status !== UserStatus.ACTIVE ||
+        user.sessionVersion !== payload.sessionVersion
+      ) {
         throw new UnauthorizedException('Аккаунт недоступен');
       }
       request.user = user;

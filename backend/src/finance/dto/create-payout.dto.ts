@@ -12,3 +12,10 @@ export class CreatePayoutDto {
   @MaxLength(255)
   reference?: string;
 }
+
+export class CancelPayoutDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
+}

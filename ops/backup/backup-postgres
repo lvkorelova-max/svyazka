@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+source /opt/backup/common.sh
+
+require_env DATABASE_URL RESTIC_REPOSITORY RESTIC_PASSWORD
+run_id="$(start_backup_run POSTGRES)"
+work_dir="/staging/postgres/$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$work_dir"
+
+on_error() {
+  fail_backup_run "$run_id" "PostgreSQL backup failed"
+}
+trap on_error ERR
+
+ensure_repository
+pg_dump "$(libpq_url "$DATABASE_URL")" --format=custom --no-owner --no-acl --file "$work_dir/postgres.dump"
+pg_restore --list "$work_dir/postgres.dump" > "$work_dir/pg_restore.list"
+(
+  cd "$work_dir"
+  sha256sum postgres.dump pg_restore.list > SHA256SUMS
+  sha256sum --check SHA256SUMS
+)
+
+cat > "$work_dir/manifest.json" <<EOF
+{"kind":"POSTGRES","createdAt":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","format":"pg_dump-custom","verifiedBy":"pg_restore --list","retentionDays":$(retention_days)}
+EOF
+
+snapshot_id="$(
+  restic backup "$work_dir" --tag postgres --json |
+    jq -r 'select(.message_type == "summary") | .snapshot_id' |
+    tail -n 1
+)"
+test -n "$snapshot_id"
+restic forget --tag postgres --keep-daily "$(retention_days)" --prune
+complete_backup_run "$run_id" "$snapshot_id" "$(cat "$work_dir/manifest.json")"
+printf '%s\n' "$snapshot_id"

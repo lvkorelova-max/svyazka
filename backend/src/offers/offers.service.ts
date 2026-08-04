@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { OfferStatus } from '@prisma/client';
+import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateOfferDto } from './dto/create-offer.dto';
 import { UpdateOfferDto } from './dto/update-offer.dto';
@@ -23,6 +24,7 @@ export class OffersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly audit: AuditService,
   ) {}
 
   async create(userId: string, dto: CreateOfferDto) {
@@ -73,11 +75,27 @@ export class OffersService {
     if (offer.status === OfferStatus.ARCHIVED) {
       throw new BadRequestException('Архивированный оффер нельзя редактировать');
     }
-    return this.prisma.offer.update({
+    const updated = await this.prisma.offer.update({
       where: { id: offer.id },
       data: dto,
       include: { brand: true },
     });
+    if (
+      dto.creatorCommissionBps !== undefined &&
+      dto.creatorCommissionBps !== offer.creatorCommissionBps
+    ) {
+      await this.audit.record({
+        actorUserId: userId,
+        action: 'OFFER_COMMISSION_RATE_CHANGED',
+        entityType: 'Offer',
+        entityId: offer.id,
+        metadata: {
+          previousCreatorCommissionBps: offer.creatorCommissionBps,
+          nextCreatorCommissionBps: dto.creatorCommissionBps,
+        },
+      });
+    }
+    return updated;
   }
 
   async transition(userId: string, offerId: string, target: OfferStatus) {
@@ -85,11 +103,19 @@ export class OffersService {
     if (!ALLOWED_TRANSITIONS[offer.status].includes(target)) {
       throw new BadRequestException(`Переход ${offer.status} → ${target} недоступен`);
     }
-    return this.prisma.offer.update({
+    const updated = await this.prisma.offer.update({
       where: { id: offer.id },
       data: { status: target },
       include: { brand: true },
     });
+    await this.audit.record({
+      actorUserId: userId,
+      action: 'OFFER_STATUS_CHANGED',
+      entityType: 'Offer',
+      entityId: offer.id,
+      metadata: { previousStatus: offer.status, nextStatus: target },
+    });
+    return updated;
   }
 
   listPublished() {

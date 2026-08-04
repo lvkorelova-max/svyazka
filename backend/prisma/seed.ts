@@ -1,6 +1,7 @@
 import {
   AffiliateRelationshipStatus,
   AttributionSource,
+  BrandVerificationStatus,
   CommissionStatus,
   CreatorKitAccessLevel,
   CreatorKitClaimType,
@@ -31,6 +32,9 @@ async function upsertUser(email: string, password: string, role: UserRole) {
 }
 
 async function main() {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('Seed запрещён в production. Используйте безопасный bootstrap администратора.');
+  }
   const brandUser = await upsertUser(
     'brand@example.test',
     process.env.SEED_BRAND_PASSWORD ?? 'BrandTest123!',
@@ -41,7 +45,7 @@ async function main() {
     process.env.SEED_CREATOR_PASSWORD ?? 'CreatorTest123!',
     UserRole.CREATOR,
   );
-  await upsertUser(
+  const adminUser = await upsertUser(
     'admin@example.test',
     process.env.SEED_ADMIN_PASSWORD ?? 'AdminTest123!',
     UserRole.ADMIN,
@@ -49,12 +53,20 @@ async function main() {
 
   const brand = await prisma.brandProfile.upsert({
     where: { userId: brandUser.id },
-    update: { brandName: 'Лаборатория Бережно' },
+    update: {
+      brandName: 'Лаборатория Бережно',
+      verificationStatus: BrandVerificationStatus.VERIFIED,
+      verifiedAt: new Date(),
+      verifiedByUserId: adminUser.id,
+    },
     create: {
       userId: brandUser.id,
       brandName: 'Лаборатория Бережно',
       description: 'Тестовый российский бренд ухода за кожей.',
       website: 'https://example.test',
+      verificationStatus: BrandVerificationStatus.VERIFIED,
+      verifiedAt: new Date(),
+      verifiedByUserId: adminUser.id,
     },
   });
 
@@ -368,8 +380,10 @@ async function main() {
       attributedRelationshipId: relationship.id,
       attributionSource: AttributionSource.CLICK_ID,
       existingOrderId: order.id,
-      previewCreatorCommissionKopecks: 37350,
-      previewPlatformCommissionKopecks: 12450,
+      creatorCommissionBpsSnapshot: order.creatorCommissionBps,
+      platformCommissionBpsSnapshot: order.platformCommissionBps,
+      previewCreatorAmountKopecks: 37350,
+      previewPlatformAmountKopecks: 12450,
       rawData: {
         external_order_id: order.externalOrderId,
         order_date: order.orderDate.toISOString(),

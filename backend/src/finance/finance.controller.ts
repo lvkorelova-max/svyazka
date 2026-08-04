@@ -14,10 +14,12 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { UserRole } from '@prisma/client';
 import { AuthenticatedUser } from '../auth/auth.types';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { RateLimit } from '../common/decorators/rate-limit.decorator';
+import { AdminSecurityGuard } from '../common/guards/admin-security.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { AccessTokenGuard } from '../common/guards/access-token.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
-import { CreatePayoutDto } from './dto/create-payout.dto';
+import { CancelPayoutDto, CreatePayoutDto } from './dto/create-payout.dto';
 import {
   CreatorAnalyticsQueryDto,
   ListFinanceQueryDto,
@@ -46,6 +48,7 @@ export class FinanceController {
 
   @Post('brand/order-imports')
   @Roles(UserRole.BRAND)
+  @RateLimit({ scope: 'csv-upload', limit: 100, windowSeconds: 3600 })
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 10_485_760, files: 1 },
@@ -174,6 +177,7 @@ export class FinanceController {
 
   @Post('admin/payouts')
   @Roles(UserRole.ADMIN)
+  @UseGuards(AdminSecurityGuard)
   createPayout(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreatePayoutDto,
@@ -183,6 +187,7 @@ export class FinanceController {
 
   @Post('admin/payouts/:id/approve')
   @Roles(UserRole.ADMIN)
+  @UseGuards(AdminSecurityGuard)
   approvePayout(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
@@ -192,6 +197,7 @@ export class FinanceController {
 
   @Post('admin/payouts/:id/mark-paid')
   @Roles(UserRole.ADMIN)
+  @UseGuards(AdminSecurityGuard)
   markPayoutPaid(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
@@ -199,9 +205,21 @@ export class FinanceController {
     return this.finance.markPayoutPaid(user.id, id);
   }
 
+  @Post('admin/payouts/:id/cancel')
+  @Roles(UserRole.ADMIN)
+  @UseGuards(AdminSecurityGuard)
+  cancelPayout(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CancelPayoutDto,
+  ) {
+    return this.finance.cancelPayout(user.id, id, dto.reason);
+  }
+
   @Post('admin/commissions/release-hold')
   @Roles(UserRole.ADMIN)
-  releaseHold() {
-    return this.finance.releaseHold();
+  @UseGuards(AdminSecurityGuard)
+  releaseHold(@CurrentUser() user: AuthenticatedUser) {
+    return this.finance.releaseHold(user.id);
   }
 }

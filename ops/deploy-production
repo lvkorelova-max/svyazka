@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+env_file="${1:-.env.production}"
+compose=(docker compose --env-file "$env_file" -f docker-compose.prod.yml)
+
+"${compose[@]}" build migration backend frontend
+"${compose[@]}" run --rm migration
+"${compose[@]}" up -d minio minio-init backend frontend caddy
+
+printf 'Production services updated. Verify /health/live and /health/ready before inviting users.\n'

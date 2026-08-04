@@ -4,6 +4,45 @@ All notable changes to this project are documented in this file.
 
 The project uses semantic versioning. Dates use the ISO `YYYY-MM-DD` format.
 
+## [0.5.0] - 2026-08-04
+
+### Financial correctness
+
+- Prevented false negative ledger balances for `PENDING` order cancellation.
+- Frozen offer BPS and preview commission amounts before CSV confirmation.
+- Added within-file duplicate detection and safe payout cancellation.
+- Added idempotent reversal caps and post-payout creator debt handling.
+
+### Security
+
+- Added route-specific rate limiting and temporary login lockout.
+- Added hashed one-time password reset tokens and session revocation.
+- Added mandatory ADMIN TOTP, hashed one-time recovery codes and emergency MFA reset.
+- Added critical-action AuditLog records with request IDs.
+- Restricted Creator Kit uploads to administrator-verified brands.
+- Added a production-only first-admin bootstrap and blocked production seed.
+
+### Operations
+
+- Added production multi-stage Docker images, Caddy HTTPS perimeter and security headers.
+- Added read-only root filesystems, non-root processes, healthchecks and resource limits.
+- Kept PostgreSQL, MinIO and MinIO Console off public host ports.
+- Added `/health/live`, `/health/ready`, structured JSON logs and critical alert webhook support.
+- Added a deployment command that always runs Prisma migrations before application update.
+
+### Backup and recovery
+
+- Added encrypted PostgreSQL and MinIO backups with 14-day retention.
+- Added manifests, checksums, `pg_restore --list` validation and protected restore commands.
+- Completed an isolated recovery drill for user, offer, order, commission, ledger and file data.
+- Made backup failure degrade operational readiness without stopping application traffic.
+
+### Verification
+
+- Added Stage 5 financial, security, brand verification and readiness coverage.
+- Verified migrations on existing and clean databases.
+- Verified production images contain no high-severity production dependency vulnerabilities.
+
 ## [0.4.0] - 2026-08-01
 
 ### Added

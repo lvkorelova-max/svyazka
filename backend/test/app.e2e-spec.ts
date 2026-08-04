@@ -1,5 +1,6 @@
 import { INestApplication, RequestMethod, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import * as argon2 from 'argon2';
 import cookieParser = require('cookie-parser');
 import request = require('supertest');
 import { AppModule } from '../src/app.module';
@@ -50,7 +51,11 @@ describe('Stage 1 end-to-end', () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     const instance = moduleRef.createNestApplication();
     instance.setGlobalPrefix('api', {
-      exclude: [{ path: 'go/:affiliateCode', method: RequestMethod.GET }],
+      exclude: [
+        { path: 'go/:affiliateCode', method: RequestMethod.GET },
+        { path: 'health/live', method: RequestMethod.GET },
+        { path: 'health/ready', method: RequestMethod.GET },
+      ],
     });
     instance.use(cookieParser());
     instance.useGlobalPipes(
@@ -79,6 +84,9 @@ describe('Stage 1 end-to-end', () => {
     app = await createApplication();
     prisma = app.get(PrismaService);
     await prisma.authSession.deleteMany();
+    await prisma.passwordResetToken.deleteMany();
+    await prisma.adminRecoveryCode.deleteMany();
+    await prisma.auditLog.deleteMany();
     await prisma.ledgerEntry.deleteMany();
     await prisma.commission.deleteMany();
     await prisma.payout.deleteMany();
@@ -103,6 +111,21 @@ describe('Stage 1 end-to-end', () => {
 
   afterAll(async () => {
     await app.close();
+  });
+
+  it('разделяет liveness и неблокирующую operational readiness', async () => {
+    await request(app.getHttpServer())
+      .get('/health/live')
+      .expect(200)
+      .expect(({ body }) => expect(body.status).toBe('OK'));
+    const readiness = await request(app.getHttpServer()).get('/health/ready').expect(200);
+    expect(['READY', 'DEGRADED']).toContain(readiness.body.status);
+    expect(readiness.body.dependencies.postgres.status).toBe('READY');
+    expect(readiness.body.dependencies.minio.status).toBe('READY');
+    expect(readiness.body.dependencies.migrations.status).toBe('READY');
+    expect(readiness.body.operational.invitationsAllowed).toBe(
+      readiness.body.status === 'READY',
+    );
   });
 
   it('регистрирует бренд и сохраняет пароль только как Argon2-хеш', async () => {
@@ -235,6 +258,77 @@ describe('Stage 1 end-to-end', () => {
       .post(`/api/brand/offers/${created.body.id}/publish`)
       .set(authHeader(owner.token))
       .expect(400);
+  });
+
+  it('разрешает загрузку файлов только после подтверждения бренда администратором', async () => {
+    const owner = await loginAgent(brand.email, brand.password);
+    const created = await owner.agent
+      .post('/api/brand/offers')
+      .set(authHeader(owner.token))
+      .send({ ...offerPayload, title: 'Оффер для верификации бренда' })
+      .expect(201);
+    const uploadPayload = {
+      title: 'Пилотный файл',
+      assetType: 'DOCUMENT',
+      accessLevel: 'DIGITAL',
+      originalFileName: 'pilot.pdf',
+      mimeType: 'application/pdf',
+      byteSize: 10,
+      editable: false,
+      textAllowed: false,
+      paidAdsAllowed: false,
+      approvalRequired: false,
+    };
+    await owner.agent
+      .post(`/api/brand/offers/${created.body.id}/creator-kit/assets/uploads`)
+      .set(authHeader(owner.token))
+      .send(uploadPayload)
+      .expect(403);
+
+    const profile = await prisma.brandProfile.findUniqueOrThrow({
+      where: { userId: (await prisma.user.findUniqueOrThrow({ where: { email: brand.email } })).id },
+    });
+    await owner.agent
+      .post(`/api/admin/brands/${profile.id}/verify`)
+      .set(authHeader(owner.token))
+      .expect(403);
+
+    const adminPassword = 'PilotAdmin123!';
+    await prisma.user.create({
+      data: {
+        email: 'pilot-admin.e2e@example.test',
+        passwordHash: await argon2.hash(adminPassword, { type: argon2.argon2id }),
+        role: 'ADMIN',
+      },
+    });
+    const admin = await loginAgent('pilot-admin.e2e@example.test', adminPassword);
+    const brands = await admin.agent
+      .get('/api/admin/brands')
+      .set(authHeader(admin.token))
+      .expect(200);
+    expect(brands.body.some((item: { id: string }) => item.id === profile.id)).toBe(true);
+    await admin.agent
+      .post(`/api/admin/brands/${profile.id}/verify`)
+      .set(authHeader(admin.token))
+      .expect(201);
+    await admin.agent
+      .post(`/api/admin/brands/${profile.id}/verify`)
+      .set(authHeader(admin.token))
+      .expect(201);
+
+    await owner.agent
+      .post(`/api/brand/offers/${created.body.id}/creator-kit/assets/uploads`)
+      .set(authHeader(owner.token))
+      .send(uploadPayload)
+      .expect(201);
+    const verified = await prisma.brandProfile.findUniqueOrThrow({ where: { id: profile.id } });
+    expect(verified.verificationStatus).toBe('VERIFIED');
+    expect(verified.verifiedByUserId).toBeTruthy();
+    expect(
+      await prisma.auditLog.count({
+        where: { action: 'BRAND_VERIFIED', entityId: profile.id },
+      }),
+    ).toBe(1);
   });
 
   it('загружает Digital-материал через presigned URL и подтверждает его через S3 HEAD', async () => {

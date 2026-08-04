@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+require_confirmation="${RESTORE_CONFIRMATION:-}"
+if [ "$require_confirmation" != "RESTORE ALL ${RESTORE_TARGET_NAME:-}" ]; then
+  printf 'Set RESTORE_CONFIRMATION=\"RESTORE ALL <target>\" and RESTORE_TARGET_NAME\n' >&2
+  exit 1
+fi
+
+RESTORE_CONFIRMATION="RESTORE POSTGRES $TARGET_DATABASE_NAME" /opt/backup/restore-postgres
+RESTORE_CONFIRMATION="RESTORE MINIO $TARGET_S3_BUCKET" /opt/backup/restore-minio

@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import {
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadBucketCommand,
   HeadObjectCommand,
   PutObjectCommand,
   S3Client,
@@ -73,5 +74,9 @@ export class S3StorageService {
     return this.internalClient.send(
       new DeleteObjectCommand({ Bucket: this.bucket, Key: objectKey }),
     );
+  }
+
+  checkBucket() {
+    return this.internalClient.send(new HeadBucketCommand({ Bucket: this.bucket }));
   }
 }

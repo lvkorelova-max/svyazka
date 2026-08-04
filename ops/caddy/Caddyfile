@@ -1,0 +1,47 @@
+{
+	email {$ACME_EMAIL}
+	admin off
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+	request_body {
+		max_size 525MB
+	}
+	header {
+		-Server
+		-Strict-Transport-Security
+		Content-Security-Policy "default-src 'self'; img-src 'self' data: https: blob:; media-src 'self' https: blob:; connect-src 'self' https://files.{$DOMAIN}; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+	import /etc/caddy/hsts
+
+	handle /api/* {
+		reverse_proxy backend:3000
+	}
+	handle /go/* {
+		reverse_proxy backend:3000
+	}
+	handle /health* {
+		reverse_proxy backend:3000
+	}
+	handle {
+		reverse_proxy frontend:8080
+	}
+}
+
+files.{$DOMAIN} {
+	request_body {
+		max_size 525MB
+	}
+	header {
+		-Server
+		-Strict-Transport-Security
+		Referrer-Policy "no-referrer"
+		X-Content-Type-Options "nosniff"
+	}
+	reverse_proxy minio:9000
+}

@@ -14,6 +14,7 @@ import {
   Prisma,
 } from '@prisma/client';
 import { createHmac, randomBytes, randomInt, randomUUID } from 'crypto';
+import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateApplicationDto } from './dto/create-application.dto';
 
@@ -70,6 +71,7 @@ export class PartnershipsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly audit: AuditService,
   ) {}
 
   async createApplication(userId: string, offerId: string, dto: CreateApplicationDto) {
@@ -330,6 +332,15 @@ export class PartnershipsService {
       },
       include: RELATIONSHIP_INCLUDE,
     });
+    if (target === AffiliateRelationshipStatus.REVOKED) {
+      await this.audit.record({
+        actorUserId: userId,
+        action: 'AFFILIATE_RELATIONSHIP_REVOKED',
+        entityType: 'AffiliateRelationship',
+        entityId: relationship.id,
+        metadata: { offerId: relationship.offerId, creatorId: relationship.creatorId },
+      });
+    }
     return this.presentRelationship(updated);
   }
 

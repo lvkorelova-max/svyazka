@@ -13,6 +13,7 @@ import {
 import { CreatorKitAccessLevel, UserRole } from '@prisma/client';
 import { AuthenticatedUser } from '../auth/auth.types';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { RateLimit } from '../common/decorators/rate-limit.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { AccessTokenGuard } from '../common/guards/access-token.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -57,6 +58,7 @@ export class CreatorKitController {
 
   @Post('brand/offers/:offerId/creator-kit/assets/uploads')
   @Roles(UserRole.BRAND)
+  @RateLimit({ scope: 'creator-kit-upload', limit: 60, windowSeconds: 3600 })
   initUpload(
     @CurrentUser() user: AuthenticatedUser,
     @Param('offerId', ParseUUIDPipe) offerId: string,

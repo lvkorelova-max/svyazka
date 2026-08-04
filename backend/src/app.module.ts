@@ -8,6 +8,9 @@ import { PartnershipsModule } from './partnerships/partnerships.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProfilesModule } from './profiles/profiles.module';
 import { StorageModule } from './storage/storage.module';
+import { AuditModule } from './audit/audit.module';
+import { SecurityModule } from './common/security.module';
+import { HealthModule } from './health/health.module';
 
 @Module({
   imports: [
@@ -29,11 +32,24 @@ import { StorageModule } from './storage/storage.module';
         if (String(config.CLICK_IP_HASH_SALT).length < 32) {
           throw new Error('CLICK_IP_HASH_SALT must contain at least 32 characters');
         }
+        if (String(config.NODE_ENV) === 'production') {
+          for (const key of ['MFA_ENCRYPTION_KEY', 'MFA_RECOVERY_CODE_SALT']) {
+            if (!config[key] || String(config[key]).length < 32) {
+              throw new Error(`${key} must contain at least 32 characters in production`);
+            }
+          }
+          if (String(config.ADMIN_MFA_REQUIRED) !== 'true') {
+            throw new Error('ADMIN_MFA_REQUIRED must be true in production');
+          }
+        }
         return config;
       },
     }),
     PrismaModule,
+    AuditModule,
+    SecurityModule,
     StorageModule,
+    HealthModule,
     AuthModule,
     CreatorKitModule,
     ProfilesModule,

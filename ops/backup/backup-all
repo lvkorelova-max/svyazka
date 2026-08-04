@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+postgres_snapshot="$(/opt/backup/backup-postgres)"
+minio_snapshot="$(/opt/backup/backup-minio)"
+printf 'PostgreSQL snapshot: %s\nMinIO snapshot: %s\n' "$postgres_snapshot" "$minio_snapshot"

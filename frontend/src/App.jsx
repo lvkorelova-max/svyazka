@@ -1035,8 +1035,14 @@ function RegisterPage({ presetRole, complete, navigate }) {
   );
 }
 
-function LoginPage({ login, navigate }) {
+function LoginPage({ login, verifyMfa, navigate }) {
   const [form, setForm] = useState({ email: "", password: "" });
+  const [challengeToken, setChallengeToken] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
+  const submitLogin = async () => {
+    const challenge = await login(form);
+    if (challenge?.mfaRequired) setChallengeToken(challenge.challengeToken);
+  };
   return (
     <main className="auth-page">
       <aside className="auth-aside">
@@ -1049,21 +1055,32 @@ function LoginPage({ login, navigate }) {
       </aside>
       <section className="auth-main">
         <div className="auth-panel">
-          <h2>Вход</h2>
-          <p>Введите email и пароль тестового аккаунта.</p>
+          <h2>{challengeToken ? "Подтверждение входа" : "Вход"}</h2>
+          <p>{challengeToken ? "Введите код из приложения-аутентификатора или одноразовый recovery code." : "Введите email и пароль тестового аккаунта."}</p>
           <div className="form-grid">
-            <div className="form-group full">
-              <label className="form-label">Email</label>
-              <input className="field" type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} />
-            </div>
-            <div className="form-group full">
-              <label className="form-label">Пароль</label>
-              <input className="field" type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} />
-            </div>
+            {challengeToken ? (
+              <div className="form-group full">
+                <label className="form-label">Код MFA</label>
+                <input className="field" value={mfaCode} onChange={(event) => setMfaCode(event.target.value)} autoComplete="one-time-code" />
+              </div>
+            ) : (
+              <>
+                <div className="form-group full">
+                  <label className="form-label">Email</label>
+                  <input className="field" type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} />
+                </div>
+                <div className="form-group full">
+                  <label className="form-label">Пароль</label>
+                  <input className="field" type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} />
+                </div>
+              </>
+            )}
           </div>
           <div className="form-actions">
-            <button className="button ghost" onClick={() => navigate("home")}>← Назад</button>
-            <button className="button" onClick={() => login(form)}>Войти</button>
+            <button className="button ghost" onClick={() => challengeToken ? setChallengeToken("") : navigate("home")}>← Назад</button>
+            <button className="button" onClick={() => challengeToken ? verifyMfa(challengeToken, mfaCode) : submitLogin()}>
+              {challengeToken ? "Подтвердить" : "Войти"}
+            </button>
           </div>
         </div>
       </section>
@@ -1532,7 +1549,7 @@ function SalesTrackingLive({ notify, preview, onUpload, onConfirm }) {
                     <td><span className="table-title">{row.externalOrderId || "Не указан"}</span><span className="table-subtitle">{row.orderStatus || "Статус не распознан"}</span></td>
                     <td>{row.attributedRelationship?.creator?.displayName || "Не атрибутирован"}<span className="table-subtitle">{row.attributionSource}</span></td>
                     <td>{moneyKopecks(row.amountKopecks)}</td>
-                    <td>{moneyKopecks(row.previewCreatorCommissionKopecks)}</td>
+                    <td>{moneyKopecks(row.previewCreatorAmountKopecks)}</td>
                     <td>
                       <Status type={row.status === "VALID" ? "success" : row.status === "DUPLICATE" ? "pending" : "danger"}>{row.status}</Status>
                       {!!row.errors?.length && <span className="table-subtitle">{row.errors.join("; ")}</span>}
@@ -1554,7 +1571,7 @@ function SalesTrackingLive({ notify, preview, onUpload, onConfirm }) {
   );
 }
 
-function BrandCreatorKitManager({ offers, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview }) {
+function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview }) {
   const brandOffers = offers;
   const [selectedOfferId, setSelectedOfferId] = useState(brandOffers[0] ? brandOffers[0].id : null);
   const [preview, setPreview] = useState(false);
@@ -1578,6 +1595,7 @@ function BrandCreatorKitManager({ offers, notify, onToggleAsset, onDownloadAsset
     ? (preview && previewKit ? previewKit : selectedOffer.creatorKit || buildCreatorKit(selectedOffer))
     : null;
   const displayedOffer = selectedOffer ? { ...selectedOffer, creatorKit: kit } : null;
+  const uploadAllowed = verificationStatus === "VERIFIED";
 
   const updateUpload = (key, value) => setUploadForm((current) => ({ ...current, [key]: value }));
 
@@ -1644,6 +1662,12 @@ function BrandCreatorKitManager({ offers, notify, onToggleAsset, onDownloadAsset
       {!preview && (
         <form className="creator-kit-upload panel" onSubmit={submitUpload}>
           <div className="panel-header"><div><h2>Добавить материал</h2><p>Файл загружается напрямую в приватное хранилище и подтверждается сервером.</p></div></div>
+          {!uploadAllowed && (
+            <div className="creator-warning compact-warning">
+              <span className="warning-mark">!</span>
+              <strong>Загрузка файлов доступна после ручного подтверждения бренда администратором. Остальные настройки Creator Kit можно заполнять сейчас.</strong>
+            </div>
+          )}
           <div className="panel-body form-grid">
             <div className="form-group full">
               <label className="form-label">Файл</label>
@@ -1669,7 +1693,7 @@ function BrandCreatorKitManager({ offers, notify, onToggleAsset, onDownloadAsset
               </div>
             </div>
           </div>
-          <div className="form-actions"><button className="button" type="submit" disabled={uploading}>{uploading ? "Загрузка…" : "Загрузить материал"}</button></div>
+          <div className="form-actions"><button className="button" type="submit" disabled={uploading || !uploadAllowed}>{uploading ? "Загрузка…" : "Загрузить материал"}</button></div>
         </form>
       )}
 
@@ -1698,7 +1722,7 @@ function BrandCreatorKitManager({ offers, notify, onToggleAsset, onDownloadAsset
   );
 }
 
-function BrandDashboard({ offers, applications, relationships, finance, orderImportPreview, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview, transitionOffer, onUploadOrders, onConfirmOrders }) {
+function BrandDashboard({ user, offers, applications, relationships, finance, orderImportPreview, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview, transitionOffer, onUploadOrders, onConfirmOrders }) {
   const [tab, setTab] = useState("offers");
 
   return (
@@ -1876,7 +1900,7 @@ function BrandDashboard({ offers, applications, relationships, finance, orderImp
       )}
 
       {tab === "tracking" && <SalesTrackingLive notify={notify} preview={orderImportPreview} onUpload={onUploadOrders} onConfirm={onConfirmOrders} />}
-      {tab === "creatorKit" && <BrandCreatorKitManager offers={offers} notify={notify} onToggleAsset={onToggleAsset} onDownloadAsset={onDownloadAsset} onUploadAsset={onUploadAsset} onLoadPreview={onLoadPreview} />}
+      {tab === "creatorKit" && <BrandCreatorKitManager offers={offers} verificationStatus={user?.profile?.verificationStatus} notify={notify} onToggleAsset={onToggleAsset} onDownloadAsset={onDownloadAsset} onUploadAsset={onUploadAsset} onLoadPreview={onLoadPreview} />}
     </DashboardLayout>
   );
 }
@@ -2053,9 +2077,45 @@ function CreateOfferPage({ publish, navigate, initialOffer }) {
   );
 }
 
-function AdminDashboard({ offers, finance, createPayout, approvePayout, markPayoutPaid }) {
+function AdminDashboard({ user, offers, brands, operationalReadiness, finance, createPayout, approvePayout, markPayoutPaid, cancelPayout, verifyBrand, changeAdminPassword, beginAdminMfa, confirmAdminMfa }) {
   const [tab, setTab] = useState("offers");
-  const brands = ["LUNEA", "FORMA", "SEVER", "KONTUR", "MIRA", "Точка дома"];
+  const [securityForm, setSecurityForm] = useState({ currentPassword: "", newPassword: "", code: "" });
+  const [mfaEnrollment, setMfaEnrollment] = useState(null);
+  const [recoveryCodes, setRecoveryCodes] = useState([]);
+
+  const updateSecurity = (key, value) => setSecurityForm((current) => ({ ...current, [key]: value }));
+
+  if (user?.mustChangePassword || !user?.mfaEnabled) {
+    return (
+      <DashboardLayout roleLabel="Администрирование" items={[{ id: "security", label: "Безопасность" }]} active="security" setActive={() => {}}>
+        <div className="dashboard-header"><div><h1>Настройка безопасности</h1><p>Финансовые и административные действия закрыты до завершения настройки.</p></div></div>
+        {user?.mustChangePassword ? (
+          <div className="panel">
+            <div className="panel-header"><div><h2>Смените временный пароль</h2><p>После смены потребуется войти заново.</p></div></div>
+            <div className="panel-body form-grid">
+              <div className="form-group"><label className="form-label">Текущий пароль</label><input className="field" type="password" value={securityForm.currentPassword} onChange={(event) => updateSecurity("currentPassword", event.target.value)} /></div>
+              <div className="form-group"><label className="form-label">Новый пароль</label><input className="field" type="password" value={securityForm.newPassword} onChange={(event) => updateSecurity("newPassword", event.target.value)} /></div>
+            </div>
+            <div className="form-actions"><button className="button" onClick={() => changeAdminPassword(securityForm.currentPassword, securityForm.newPassword)}>Сменить пароль</button></div>
+          </div>
+        ) : (
+          <div className="panel">
+            <div className="panel-header"><div><h2>Подключите TOTP</h2><p>Второй фактор обязателен до работы с выплатами.</p></div></div>
+            <div className="panel-body form-grid">
+              {!mfaEnrollment && <div className="form-group"><label className="form-label">Текущий пароль</label><input className="field" type="password" value={securityForm.currentPassword} onChange={(event) => updateSecurity("currentPassword", event.target.value)} /></div>}
+              {mfaEnrollment && <>
+                <div className="form-group full"><label className="form-label">Секрет TOTP</label><input className="field" readOnly value={mfaEnrollment.secret} /></div>
+                <div className="form-group full"><label className="form-label">URI для приложения-аутентификатора</label><input className="field" readOnly value={mfaEnrollment.otpauthUrl} /></div>
+                <div className="form-group"><label className="form-label">Код из приложения</label><input className="field" inputMode="numeric" value={securityForm.code} onChange={(event) => updateSecurity("code", event.target.value)} /></div>
+              </>}
+            </div>
+            <div className="form-actions">{!mfaEnrollment ? <button className="button" onClick={async () => setMfaEnrollment(await beginAdminMfa(securityForm.currentPassword))}>Начать настройку</button> : <button className="button" onClick={async () => setRecoveryCodes(await confirmAdminMfa(securityForm.code))}>Подтвердить TOTP</button>}</div>
+            {!!recoveryCodes.length && <div className="creator-warning compact-warning"><span className="warning-mark">!</span><strong>Сохраните одноразовые recovery codes в защищённом месте: {recoveryCodes.join(" · ")}</strong></div>}
+          </div>
+        )}
+      </DashboardLayout>
+    );
+  }
   return (
     <DashboardLayout
       roleLabel="Администрирование"
@@ -2081,6 +2141,12 @@ function AdminDashboard({ offers, finance, createPayout, approvePayout, markPayo
         <span className="warning-mark">!</span>
         <strong>Файловый pipeline MVP не включает антивирусную проверку. Использовать только в закрытом пилоте с проверенными брендами. Перед публичным запуском подключить quarantine, ClamAV и worker</strong>
       </div>
+      {operationalReadiness?.status === "DEGRADED" && (
+        <div className="creator-warning compact-warning">
+          <span className="warning-mark">!</span>
+          <strong>Критическое предупреждение: резервные копии отсутствуют или устарели. Основной сервис работает, но приглашать пользователей запрещено до успешного PostgreSQL и MinIO backup.</strong>
+        </div>
+      )}
       <div className="stats-grid">
         <div className="stat-card"><span className="stat-label">Бренды</span><span className="stat-value">6</span><span className="stat-note">в демонстрационных данных</span></div>
         <div className="stat-card"><span className="stat-label">Креаторы</span><span className="stat-value">148</span><span className="stat-note">тестовые профили</span></div>
@@ -2116,8 +2182,9 @@ function AdminDashboard({ offers, finance, createPayout, approvePayout, markPayo
 
       {tab === "brands" && (
         <div className="panel">
-          <div className="panel-header"><h2>Бренды</h2></div>
-          <div className="table-wrap"><table className="data-table"><thead><tr><th>Бренд</th><th>Офферы</th><th>Статус</th></tr></thead><tbody>{brands.map((brand) => <tr key={brand}><td><strong>{brand}</strong></td><td>{offers.filter((item) => item.brand === brand).length}</td><td><Status type="success">Активен</Status></td></tr>)}</tbody></table></div>
+          <div className="panel-header"><h2>Бренды пилота</h2><Status type="success">Подключено</Status></div>
+          <div className="table-wrap"><table className="data-table"><thead><tr><th>Бренд</th><th>Email</th><th>Офферы</th><th>Доступ к файлам</th><th></th></tr></thead><tbody>{brands.map((brand) => <tr key={brand.id}><td><strong>{brand.brandName}</strong></td><td>{brand.user.email}</td><td>{brand._count?.offers || 0}</td><td><Status type={brand.verificationStatus === "VERIFIED" ? "success" : "pending"}>{brand.verificationStatus === "VERIFIED" ? "Подтверждён" : "Ожидает проверки"}</Status></td><td>{brand.verificationStatus !== "VERIFIED" && <button className="button small" onClick={() => verifyBrand(brand.id)}>Подтвердить</button>}</td></tr>)}</tbody></table></div>
+          {!brands.length && <div className="empty-state">Зарегистрированных брендов пока нет.</div>}
         </div>
       )}
 
@@ -2155,7 +2222,7 @@ function AdminDashboard({ offers, finance, createPayout, approvePayout, markPayo
                 <tr key={payout.id}>
                   <td>{payout.creator.displayName}</td><td>{moneyKopecks(payout.amountKopecks)}</td><td>{payout.reference || "—"}</td>
                   <td><Status type={payout.status === "PAID" ? "success" : "pending"}>{payout.status}</Status></td>
-                  <td><div className="row-actions">{payout.status === "DRAFT" && <button className="button secondary small" onClick={() => approvePayout(payout.id)}>Подтвердить</button>}{payout.status === "APPROVED" && <button className="button small" onClick={() => markPayoutPaid(payout.id)}>Отметить выплаченным</button>}</div></td>
+                  <td><div className="row-actions">{payout.status === "DRAFT" && <button className="button secondary small" onClick={() => approvePayout(payout.id)}>Подтвердить</button>}{payout.status === "APPROVED" && <button className="button small" onClick={() => markPayoutPaid(payout.id)}>Отметить выплаченным</button>}{["DRAFT", "APPROVED"].includes(payout.status) && <button className="button ghost small" onClick={() => cancelPayout(payout.id)}>Отменить</button>}</div></td>
                 </tr>
               ))}</tbody>
             </table>
@@ -2257,6 +2324,8 @@ function App() {
   const [creatorFinance, setCreatorFinance] = useState({ clicks: { items: [] }, orders: { items: [] }, commissions: { items: [] }, summary: {} });
   const [brandFinance, setBrandFinance] = useState({ orders: { items: [] }, commissions: { items: [] }, analytics: {}, creatorAnalytics: { items: [] } });
   const [adminFinance, setAdminFinance] = useState({ commissions: { items: [] }, payouts: { items: [] }, ledger: { items: [] } });
+  const [adminBrands, setAdminBrands] = useState([]);
+  const [operationalReadiness, setOperationalReadiness] = useState(null);
   const [orderImportPreview, setOrderImportPreview] = useState(null);
   const [toast, setToast] = useState("");
   const [sessionReady, setSessionReady] = useState(false);
@@ -2298,12 +2367,16 @@ function App() {
       ]);
       setCreatorFinance({ clicks: clicksData, orders: ordersData, commissions: commissionsData, summary: summaryData });
     } else if (currentRole === "admin") {
-      const [commissionsData, payoutsData, ledgerData] = await Promise.all([
+      const [commissionsData, payoutsData, ledgerData, brandsData, readinessData] = await Promise.all([
         api("/admin/commissions?pageSize=100"),
         api("/admin/payouts?pageSize=100"),
-        api("/admin/ledger-entries?pageSize=100")
+        api("/admin/ledger-entries?pageSize=100"),
+        api("/admin/brands"),
+        api("/admin/operations/readiness")
       ]);
       setAdminFinance({ commissions: commissionsData, payouts: payoutsData, ledger: ledgerData });
+      setAdminBrands(brandsData);
+      setOperationalReadiness(readinessData);
     }
   };
 
@@ -2369,7 +2442,13 @@ function App() {
       setOffers(initialOffers);
       setApplications([]);
       setRelationships([]);
-      await loadFinance("admin");
+      try {
+        await loadFinance("admin");
+      } catch {
+        setAdminFinance({ commissions: { items: [] }, payouts: { items: [] }, ledger: { items: [] } });
+        setAdminBrands([]);
+        setOperationalReadiness(null);
+      }
     } else {
       setOffers([]);
       setApplications([]);
@@ -2454,12 +2533,33 @@ function App() {
         method: "POST",
         body: JSON.stringify(form)
       });
+      if (result.mfaRequired) return result;
       setAccessToken(result.accessToken);
       const nextRole = roleFromUser(result.user);
       setRole(nextRole);
       setUser(await api("/auth/me"));
       await loadOffers(nextRole);
       notify("Вход выполнен");
+      navigate(nextRole, { asRole: nextRole });
+      return null;
+    } catch (error) {
+      notify(error.message);
+      return null;
+    }
+  };
+
+  const verifyMfa = async (challengeToken, code) => {
+    try {
+      const result = await api("/auth/admin/mfa/verify", {
+        method: "POST",
+        body: JSON.stringify({ challengeToken, code })
+      });
+      setAccessToken(result.accessToken);
+      const nextRole = roleFromUser(result.user);
+      setRole(nextRole);
+      setUser(await api("/auth/me"));
+      await loadOffers(nextRole);
+      notify("Вход подтверждён");
       navigate(nextRole, { asRole: nextRole });
     } catch (error) {
       notify(error.message);
@@ -2591,6 +2691,70 @@ function App() {
     }
   };
 
+  const cancelPayout = async (payoutId) => {
+    try {
+      await api(`/admin/payouts/${payoutId}/cancel`, {
+        method: "POST",
+        body: JSON.stringify({ reason: "Отменено администратором" })
+      });
+      await loadFinance("admin");
+      notify("Payout отменён, комиссии снова доступны");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const verifyBrand = async (brandId) => {
+    try {
+      await api(`/admin/brands/${brandId}/verify`, { method: "POST" });
+      await loadFinance("admin");
+      notify("Бренд подтверждён для загрузки файлов");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const changeAdminPassword = async (currentPassword, newPassword) => {
+    try {
+      await api("/auth/password/change", {
+        method: "POST",
+        body: JSON.stringify({ currentPassword, newPassword })
+      });
+      notify("Пароль изменён. Выполните вход заново");
+      await logout();
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const beginAdminMfa = async (currentPassword) => {
+    try {
+      return await api("/auth/admin/mfa/enroll", {
+        method: "POST",
+        body: JSON.stringify({ currentPassword })
+      });
+    } catch (error) {
+      notify(error.message);
+      throw error;
+    }
+  };
+
+  const confirmAdminMfa = async (code) => {
+    try {
+      const result = await api("/auth/admin/mfa/confirm", {
+        method: "POST",
+        body: JSON.stringify({ code })
+      });
+      setUser(await api("/auth/me"));
+      await loadOffers("admin");
+      notify("TOTP подключён");
+      return result.recoveryCodes || [];
+    } catch (error) {
+      notify(error.message);
+      throw error;
+    }
+  };
+
   const saveOffer = async (offer, shouldPublish = false, existingOfferId = null) => {
     try {
       const promotionMap = { yes: "YES", no: "NO", restricted: "LIMITED" };
@@ -2703,11 +2867,11 @@ function App() {
       {page === "catalog" && <CatalogPage offers={offers} openOffer={openOffer} navigate={navigate} />}
       {page === "offer" && selectedOffer && <OfferPage offer={selectedOffer} applicationStatus={(applications.find((item) => item.offerId === selectedOffer.id)?.status || "NONE").toLowerCase()} role={role} apply={apply} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} />}
       {page === "register" && <RegisterPage presetRole={registerRole} complete={completeRegistration} navigate={navigate} />}
-      {page === "login" && <LoginPage login={login} navigate={navigate} />}
+      {page === "login" && <LoginPage login={login} verifyMfa={verifyMfa} navigate={navigate} />}
       {page === "creator" && role === "creator" && <CreatorDashboard user={user} applications={applications} relationships={relationships} offers={offers} finance={creatorFinance} cancelApplication={cancelApplication} copyValue={copyValue} navigate={navigate} />}
-      {page === "brand" && role === "brand" && <BrandDashboard offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} />}
+      {page === "brand" && role === "brand" && <BrandDashboard user={user} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} />}
       {page === "create" && role === "brand" && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} />}
-      {page === "admin" && role === "admin" && <AdminDashboard offers={offers} finance={adminFinance} createPayout={createPayout} approvePayout={approvePayout} markPayoutPaid={markPayoutPaid} />}
+      {page === "admin" && role === "admin" && <AdminDashboard user={user} offers={offers} brands={adminBrands} operationalReadiness={operationalReadiness} finance={adminFinance} createPayout={createPayout} approvePayout={approvePayout} markPayoutPaid={markPayoutPaid} cancelPayout={cancelPayout} verifyBrand={verifyBrand} changeAdminPassword={changeAdminPassword} beginAdminMfa={beginAdminMfa} confirmAdminMfa={confirmAdminMfa} />}
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
   );
