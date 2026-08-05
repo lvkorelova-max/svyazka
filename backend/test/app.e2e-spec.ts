@@ -143,6 +143,15 @@ describe('Stage 1 end-to-end', () => {
     const stored = await prisma.user.findUniqueOrThrow({ where: { email: brand.email } });
     expect(stored.passwordHash).not.toBe(brand.password);
     expect(stored.passwordHash).toMatch(/^\$argon2id\$/);
+    const profile = await prisma.brandProfile.findUniqueOrThrow({
+      where: { userId: stored.id },
+    });
+    expect(profile.brandName).toBe(brand.name);
+    const currentUser = await request(app.getHttpServer())
+      .get('/api/auth/me')
+      .set(authHeader(response.body.accessToken))
+      .expect(200);
+    expect(currentUser.body.profile.brandName).toBe(brand.name);
   });
 
   it('запрещает повторную регистрацию на тот же email без учёта регистра', async () => {
@@ -239,6 +248,11 @@ describe('Stage 1 end-to-end', () => {
     app = await createApplication();
     prisma = app.get(PrismaService);
     const afterRestart = await loginAgent(brand.email, brand.password);
+    const currentUser = await afterRestart.agent
+      .get('/api/auth/me')
+      .set(authHeader(afterRestart.token))
+      .expect(200);
+    expect(currentUser.body.profile.brandName).toBe(brand.name);
     const offers = await afterRestart.agent
       .get('/api/brand/offers')
       .set(authHeader(afterRestart.token))

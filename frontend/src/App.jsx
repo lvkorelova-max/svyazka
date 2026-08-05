@@ -2126,6 +2126,7 @@ function BrandCreatorKitManager({ offers, relationships, verificationStatus, not
 
 function BrandDashboard({ user, offers, applications, relationships, finance, orderImportPreview, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onReload, transitionOffer, onUploadOrders, onConfirmOrders }) {
   const [tab, setTab] = useState("offers");
+  const brandName = user?.profile?.brandName || "Бренд";
 
   return (
     <DashboardLayout
@@ -2159,7 +2160,7 @@ function BrandDashboard({ user, offers, applications, relationships, finance, or
         <>
           <div className="dashboard-header">
             <div>
-              <h1>Бренд LUNEA</h1>
+              <h1>Бренд {brandName}</h1>
               <p>Управление офферами и заявками креаторов.</p>
             </div>
             <button className="button" onClick={() => navigate("create")}>＋ Создать оффер</button>
@@ -2307,7 +2308,7 @@ function BrandDashboard({ user, offers, applications, relationships, finance, or
   );
 }
 
-function CreateOfferPage({ publish, navigate, initialOffer }) {
+function CreateOfferPage({ publish, navigate, initialOffer, brandName }) {
   const [form, setForm] = useState({
     title: initialOffer?.title || "Набор для ночного ухода Renewal",
     category: initialOffer?.category || "Красота и уход",
@@ -2336,7 +2337,7 @@ function CreateOfferPage({ publish, navigate, initialOffer }) {
   const previewBase = {
     ...form,
     id: 99,
-    brand: "LUNEA",
+    brand: brandName || initialOffer?.brand || "Бренд",
     image: productImages.cosmetics,
     status: "review",
     applications: 0,
@@ -3322,7 +3323,7 @@ function App() {
       {page === "login" && <LoginPage login={login} verifyMfa={verifyMfa} navigate={navigate} />}
       {page === "creator" && role === "creator" && <CreatorDashboard user={user} applications={applications} relationships={relationships} offers={offers} finance={creatorFinance} cancelApplication={cancelApplication} copyValue={copyValue} navigate={navigate} />}
       {page === "brand" && role === "brand" && <BrandDashboard user={user} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onReload={() => loadOffers("brand")} transitionOffer={transitionOffer} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} />}
-      {page === "create" && role === "brand" && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} />}
+      {page === "create" && role === "brand" && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} brandName={user?.profile?.brandName} />}
       {page === "admin" && role === "admin" && <AdminDashboard user={user} offers={offers} brands={adminBrands} operationalReadiness={operationalReadiness} finance={adminFinance} createPayout={createPayout} approvePayout={approvePayout} markPayoutPaid={markPayoutPaid} cancelPayout={cancelPayout} verifyBrand={verifyBrand} changeAdminPassword={changeAdminPassword} beginAdminMfa={beginAdminMfa} confirmAdminMfa={confirmAdminMfa} />}
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
