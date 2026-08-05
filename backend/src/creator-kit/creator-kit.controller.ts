@@ -1,10 +1,12 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseEnumPipe,
   ParseUUIDPipe,
+  Patch,
   Post,
   Put,
   Query,
@@ -17,9 +19,21 @@ import { RateLimit } from '../common/decorators/rate-limit.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { AccessTokenGuard } from '../common/guards/access-token.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { AdminSecurityGuard } from '../common/guards/admin-security.guard';
 import { CreatorKitService } from './creator-kit.service';
 import { InitCreatorKitUploadDto } from './dto/init-upload.dto';
-import { UpsertCreatorKitDto } from './dto/upsert-creator-kit.dto';
+import {
+  PreviewAsCreatorDto,
+  ProductAccessDto,
+  PublishCreatorKitDto,
+  ReorderScenariosDto,
+  RestoreCreatorKitDto,
+} from './dto/revision.dto';
+import {
+  CreatorKitScenarioDto,
+  UpdateCreatorKitScenarioDto,
+  UpsertCreatorKitDto,
+} from './dto/upsert-creator-kit.dto';
 
 @Controller()
 @UseGuards(AccessTokenGuard, RolesGuard)
@@ -52,8 +66,181 @@ export class CreatorKitController {
     @Param('offerId', ParseUUIDPipe) offerId: string,
     @Query('accessLevel', new ParseEnumPipe(CreatorKitAccessLevel))
     accessLevel: CreatorKitAccessLevel,
+    @Query('source') source?: 'DRAFT' | 'PUBLISHED',
+    @Query('affiliateApproved') affiliateApproved?: string,
   ) {
-    return this.creatorKit.getBrandPreview(user.id, offerId, accessLevel);
+    return this.creatorKit.getBrandPreview(
+      user.id,
+      offerId,
+      accessLevel,
+      source === 'PUBLISHED' ? 'PUBLISHED' : 'DRAFT',
+      affiliateApproved !== 'false',
+    );
+  }
+
+  @Post('brand/offers/:offerId/creator-kit/preview-as-creator')
+  @Roles(UserRole.BRAND)
+  previewAsCreator(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('offerId', ParseUUIDPipe) offerId: string,
+    @Body() dto: PreviewAsCreatorDto,
+  ) {
+    return this.creatorKit.previewAsCreator(user.id, offerId, dto);
+  }
+
+  @Post('brand/offers/:offerId/creator-kit/publish')
+  @Roles(UserRole.BRAND)
+  publish(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('offerId', ParseUUIDPipe) offerId: string,
+    @Body() dto: PublishCreatorKitDto,
+  ) {
+    return this.creatorKit.publish(user.id, offerId, dto);
+  }
+
+  @Get('brand/offers/:offerId/creator-kit/revisions')
+  @Roles(UserRole.BRAND)
+  revisions(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('offerId', ParseUUIDPipe) offerId: string,
+  ) {
+    return this.creatorKit.getRevisions(user.id, offerId);
+  }
+
+  @Post('brand/offers/:offerId/creator-kit/revisions/:revisionId/create-draft')
+  @Roles(UserRole.BRAND)
+  createDraftFromRevision(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('offerId', ParseUUIDPipe) offerId: string,
+    @Param('revisionId', ParseUUIDPipe) revisionId: string,
+  ) {
+    return this.creatorKit.createDraftFromRevision(user.id, offerId, revisionId);
+  }
+
+  @Get('brand/offers/:offerId/creator-kit/revisions/:revisionId/restore-preview')
+  @Roles(UserRole.BRAND)
+  restorePreview(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('offerId', ParseUUIDPipe) offerId: string,
+    @Param('revisionId', ParseUUIDPipe) revisionId: string,
+  ) {
+    return this.creatorKit.restorePreview(user.id, offerId, revisionId);
+  }
+
+  @Post('brand/offers/:offerId/creator-kit/revisions/:revisionId/restore')
+  @Roles(UserRole.BRAND)
+  restore(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('offerId', ParseUUIDPipe) offerId: string,
+    @Param('revisionId', ParseUUIDPipe) revisionId: string,
+    @Body() dto: RestoreCreatorKitDto,
+  ) {
+    return this.creatorKit.restore(user.id, offerId, revisionId, dto);
+  }
+
+  @Delete('brand/offers/:offerId/creator-kit/draft')
+  @Roles(UserRole.BRAND)
+  discardDraft(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('offerId', ParseUUIDPipe) offerId: string,
+  ) {
+    return this.creatorKit.discardDraft(user.id, offerId);
+  }
+
+  @Post('brand/offers/:offerId/creator-kit/scenarios')
+  @Roles(UserRole.BRAND)
+  createScenario(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('offerId', ParseUUIDPipe) offerId: string,
+    @Body() dto: CreatorKitScenarioDto,
+  ) {
+    return this.creatorKit.createScenario(user.id, offerId, dto);
+  }
+
+  @Put('brand/offers/:offerId/creator-kit/scenarios/reorder')
+  @Roles(UserRole.BRAND)
+  reorderScenarios(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('offerId', ParseUUIDPipe) offerId: string,
+    @Body() dto: ReorderScenariosDto,
+  ) {
+    return this.creatorKit.reorderScenarios(user.id, offerId, dto.scenarioIds);
+  }
+
+  @Patch('brand/offers/:offerId/creator-kit/scenarios/:scenarioId')
+  @Roles(UserRole.BRAND)
+  updateScenario(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('offerId', ParseUUIDPipe) offerId: string,
+    @Param('scenarioId', ParseUUIDPipe) scenarioId: string,
+    @Body() dto: UpdateCreatorKitScenarioDto,
+  ) {
+    return this.creatorKit.updateScenario(user.id, offerId, scenarioId, dto);
+  }
+
+  @Delete('brand/offers/:offerId/creator-kit/scenarios/:scenarioId')
+  @Roles(UserRole.BRAND)
+  deleteScenario(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('offerId', ParseUUIDPipe) offerId: string,
+    @Param('scenarioId', ParseUUIDPipe) scenarioId: string,
+  ) {
+    return this.creatorKit.deleteScenario(user.id, offerId, scenarioId);
+  }
+
+  @Get('brand/offers/:offerId/product-access')
+  @Roles(UserRole.BRAND)
+  listBrandProductAccess(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('offerId', ParseUUIDPipe) offerId: string,
+  ) {
+    return this.creatorKit.listProductAccess(user, offerId);
+  }
+
+  @Post('brand/offers/:offerId/product-access/:creatorId/grant')
+  @Roles(UserRole.BRAND)
+  grantBrandProductAccess(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('offerId', ParseUUIDPipe) offerId: string,
+    @Param('creatorId', ParseUUIDPipe) creatorId: string,
+    @Body() dto: ProductAccessDto,
+  ) {
+    return this.creatorKit.grantProductAccess(user, offerId, creatorId, dto);
+  }
+
+  @Post('brand/offers/:offerId/product-access/:creatorId/revoke')
+  @Roles(UserRole.BRAND)
+  revokeBrandProductAccess(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('offerId', ParseUUIDPipe) offerId: string,
+    @Param('creatorId', ParseUUIDPipe) creatorId: string,
+    @Body() dto: ProductAccessDto,
+  ) {
+    return this.creatorKit.revokeProductAccess(user, offerId, creatorId, dto);
+  }
+
+  @Post('admin/offers/:offerId/product-access/:creatorId/grant')
+  @Roles(UserRole.ADMIN)
+  @UseGuards(AdminSecurityGuard)
+  grantAdminProductAccess(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('offerId', ParseUUIDPipe) offerId: string,
+    @Param('creatorId', ParseUUIDPipe) creatorId: string,
+    @Body() dto: ProductAccessDto,
+  ) {
+    return this.creatorKit.grantProductAccess(user, offerId, creatorId, dto);
+  }
+
+  @Post('admin/offers/:offerId/product-access/:creatorId/revoke')
+  @Roles(UserRole.ADMIN)
+  @UseGuards(AdminSecurityGuard)
+  revokeAdminProductAccess(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('offerId', ParseUUIDPipe) offerId: string,
+    @Param('creatorId', ParseUUIDPipe) creatorId: string,
+    @Body() dto: ProductAccessDto,
+  ) {
+    return this.creatorKit.revokeProductAccess(user, offerId, creatorId, dto);
   }
 
   @Post('brand/offers/:offerId/creator-kit/assets/uploads')

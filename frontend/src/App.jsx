@@ -89,17 +89,38 @@ function mapCreatorKit(kit, offer) {
   const facts = Object.fromEntries((kit?.facts || []).map((fact) => [factTypeLabels[fact.type] || fact.type, fact.value]));
   const scenarios = (kit?.scenarios || []).map((scenario) => ({
     ...scenario,
+    channelValue: scenario.channel,
     channel: scenarioChannelLabels[scenario.channel] || scenario.channel,
-    idea: scenario.idea
+    idea: scenario.mainIdea || scenario.idea || ""
   }));
   const productScenarios = scenarios.filter((scenario) => scenario.accessLevel === "PRODUCT");
 
   return {
+    loaded: Boolean(kit),
     promotionWithoutSample: policy === "YES" ? "yes" : policy === "NO" ? "no" : "restricted",
     allowedDigitalFormats: kit?.offerPolicy?.allowedPromotionFormats || offer?.allowedPromotionFormats || [],
     productAccessFormats: productScenarios.map((scenario) => scenario.title),
     completeness: kit?.completeness?.percent || 0,
-    completenessMissing: kit?.completeness?.missing || [],
+    completenessMissing: kit?.completeness?.missingSections || [],
+    completenessSections: kit?.completeness?.sections || [],
+    readyToPublish: Boolean(kit?.completeness?.readyToPublish),
+    revision: kit?.revision || kit?.accessContext?.revision || null,
+    accessContext: kit?.accessContext || {},
+    brandContent: {
+      description: kit?.brandContent?.description || "",
+      history: kit?.brandContent?.history || "",
+      values: kit?.brandContent?.values || [],
+      positioning: kit?.brandContent?.positioning || "",
+      accessLevel: kit?.brandContent?.accessLevel || "DIGITAL",
+      requiresAffiliateApproval: Boolean(kit?.brandContent?.requiresAffiliateApproval)
+    },
+    productContent: {
+      description: kit?.productContent?.description || "",
+      benefits: kit?.productContent?.benefits || [],
+      usageInstructions: kit?.productContent?.usageInstructions || "",
+      accessLevel: kit?.productContent?.accessLevel || "DIGITAL",
+      requiresAffiliateApproval: Boolean(kit?.productContent?.requiresAffiliateApproval)
+    },
     assets: (kit?.assets || []).map((asset) => ({
       id: asset.id,
       name: asset.title,
@@ -119,9 +140,13 @@ function mapCreatorKit(kit, offer) {
     })),
     scenarios,
     facts,
+    factsRaw: kit?.facts || [],
     allowedClaims: (kit?.claims || []).filter((claim) => claim.type === "ALLOWED").map((claim) => claim.value),
     forbiddenClaims: (kit?.claims || []).filter((claim) => claim.type === "FORBIDDEN").map((claim) => claim.value),
     noSampleRules: (kit?.rules || []).map((rule) => rule.value),
+    claimsRaw: kit?.claims || [],
+    rulesRaw: kit?.rules || [],
+    publicationRaw: publication || null,
     publicationRequirements: publication ? {
       "Обязательные упоминания": publication.mandatoryMentions.join(", ") || "Не заданы",
       "Маркировка рекламы": publication.advertisingLabel || "Не задана",
@@ -579,7 +604,7 @@ function PermissionValue({ value }) {
 }
 
 function CreatorKit({ offer, mode = "creator", hasProductAccess = false, notify, onToggleAsset, onDownloadAsset }) {
-  const kit = offer.creatorKit || buildCreatorKit(offer);
+  const kit = offer.creatorKit || mapCreatorKit(null, offer);
   const [selectedAssets, setSelectedAssets] = useState(kit.assets.filter((asset) => asset.active).slice(0, 2).map((asset) => asset.id));
   const [kitTab, setKitTab] = useState("assets");
   const [draftOpen, setDraftOpen] = useState(false);
@@ -614,7 +639,7 @@ function CreatorKit({ offer, mode = "creator", hasProductAccess = false, notify,
           </span>
           <span className={`access-badge product ${hasProductAccess ? "unlocked" : "locked"}`}>
             <b>{hasProductAccess ? "Product Access" : "Product Access · закрыт"}</b>
-            <small>{hasProductAccess ? "Образец подтверждён" : `После получения образца`}</small>
+            <small>{hasProductAccess ? "Ручной доступ для пилота" : "Выдаётся брендом вручную"}</small>
           </span>
         </div>
       </div>
@@ -723,7 +748,7 @@ function CreatorKit({ offer, mode = "creator", hasProductAccess = false, notify,
               <span className="access-lock">{hasProductAccess ? "✓" : "×"}</span>
               <div>
                 <h3>Product Access</h3>
-                <p>{hasProductAccess ? "Получение образца подтверждено. Можно создавать форматы с реальным использованием продукта." : "Откроется после подтверждённого получения физического образца."}</p>
+                <p>{hasProductAccess ? "Бренд вручную открыл Product Access для закрытого пилота. Это не подтверждает отправку или получение образца." : "Product Access выдаётся брендом вручную и не означает отправку физического образца."}</p>
               </div>
             </div>
             <div className="format-chips">
@@ -735,6 +760,21 @@ function CreatorKit({ offer, mode = "creator", hasProductAccess = false, notify,
 
       {kitTab === "facts" && (
         <div className="kit-content">
+          <div className="rules-requirements">
+            <div>
+              <h3>О бренде</h3>
+              {kit.brandContent.description ? <p>{kit.brandContent.description}</p> : <p>Раздел пока не заполнен.</p>}
+              {kit.brandContent.history && <p>{kit.brandContent.history}</p>}
+              {kit.brandContent.positioning && <p><strong>Позиционирование:</strong> {kit.brandContent.positioning}</p>}
+              {!!kit.brandContent.values.length && <p><strong>Ценности:</strong> {kit.brandContent.values.join(", ")}</p>}
+            </div>
+            <div>
+              <h3>О продукте</h3>
+              {kit.productContent.description ? <p>{kit.productContent.description}</p> : <p>Раздел пока не заполнен.</p>}
+              {!!kit.productContent.benefits.length && <p><strong>Преимущества:</strong> {kit.productContent.benefits.join(", ")}</p>}
+              {kit.productContent.usageInstructions && <p><strong>Применение:</strong> {kit.productContent.usageInstructions}</p>}
+            </div>
+          </div>
           <div className="kit-section-heading"><div><h3>Банк фактов о продукте</h3><p>Формулировки основаны на данных бренда и могут использоваться без заявления о личном опыте.</p></div></div>
           <div className="facts-grid">
             {Object.entries(kit.facts).map(([label, value]) => (
@@ -911,7 +951,7 @@ function OfferPage({ offer, applicationStatus, role, apply, navigate, notify, on
         <CreatorKit
           offer={offer}
           mode="creator"
-          hasProductAccess={false}
+          hasProductAccess={Boolean(offer.creatorKit.accessContext?.hasProductAccess)}
           notify={notify}
           onToggleAsset={onToggleAsset}
           onDownloadAsset={onDownloadAsset}
@@ -1571,13 +1611,32 @@ function SalesTrackingLive({ notify, preview, onUpload, onConfirm }) {
   );
 }
 
-function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview }) {
+function BrandCreatorKitManager({ offers, relationships, verificationStatus, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onReload }) {
   const brandOffers = offers;
   const [selectedOfferId, setSelectedOfferId] = useState(brandOffers[0] ? brandOffers[0].id : null);
   const [preview, setPreview] = useState(false);
-  const [previewAccess, setPreviewAccess] = useState("digital");
+  const [previewSource, setPreviewSource] = useState("DRAFT");
+  const [previewProduct, setPreviewProduct] = useState("NOT_GRANTED");
+  const [previewAffiliate, setPreviewAffiliate] = useState("INACTIVE");
+  const [previewCreatorId, setPreviewCreatorId] = useState("");
   const [previewKit, setPreviewKit] = useState(null);
+  const [revisions, setRevisions] = useState([]);
+  const [productAccess, setProductAccess] = useState([]);
+  const [restoreDetails, setRestoreDetails] = useState(null);
+  const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [editor, setEditor] = useState(null);
+  const [scenarioForm, setScenarioForm] = useState({
+    id: "",
+    channel: "REELS",
+    title: "",
+    hook: "",
+    mainIdea: "",
+    structure: "",
+    cta: "",
+    accessLevel: "DIGITAL",
+    requiresAffiliateApproval: false
+  });
   const [uploadForm, setUploadForm] = useState({
     file: null,
     title: "",
@@ -1591,27 +1650,286 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
     expiresAt: ""
   });
   const selectedOffer = brandOffers.find((offer) => offer.id === selectedOfferId) || brandOffers[0];
-  const kit = selectedOffer
-    ? (preview && previewKit ? previewKit : selectedOffer.creatorKit || buildCreatorKit(selectedOffer))
-    : null;
+  const kit = selectedOffer ? (preview && previewKit ? previewKit : selectedOffer.creatorKit) : null;
   const displayedOffer = selectedOffer ? { ...selectedOffer, creatorKit: kit } : null;
   const uploadAllowed = verificationStatus === "VERIFIED";
+  const offerRelationships = relationships.filter((item) => item.offerId === selectedOffer?.id);
+  const relevantCreators = Array.from(
+    new Map(offerRelationships.map((item) => [item.creator.id, item.creator])).values()
+  );
 
   const updateUpload = (key, value) => setUploadForm((current) => ({ ...current, [key]: value }));
 
-  const loadPreview = async (access = previewAccess) => {
+  const loadMetadata = async (offerId) => {
+    const [history, grants] = await Promise.all([
+      api(`/brand/offers/${offerId}/creator-kit/revisions`),
+      api(`/brand/offers/${offerId}/product-access`)
+    ]);
+    setRevisions(history);
+    setProductAccess(grants);
+  };
+
+  const resetEditor = (sourceKit) => {
+    setEditor({
+      brandDescription: sourceKit.brandContent.description,
+      brandHistory: sourceKit.brandContent.history,
+      brandValues: sourceKit.brandContent.values.join("\n"),
+      brandPositioning: sourceKit.brandContent.positioning,
+      brandAccessLevel: sourceKit.brandContent.accessLevel,
+      brandAffiliate: sourceKit.brandContent.requiresAffiliateApproval,
+      productDescription: sourceKit.productContent.description,
+      productBenefits: sourceKit.productContent.benefits.join("\n"),
+      usageInstructions: sourceKit.productContent.usageInstructions,
+      productAccessLevel: sourceKit.productContent.accessLevel,
+      productAffiliate: sourceKit.productContent.requiresAffiliateApproval,
+      facts: (sourceKit.factsRaw || []).map((item) => ({ ...item })),
+      allowedClaims: sourceKit.allowedClaims.join("\n"),
+      forbiddenClaims: sourceKit.forbiddenClaims.join("\n"),
+      rules: sourceKit.noSampleRules.join("\n"),
+      mandatoryMentions: sourceKit.publicationRaw?.mandatoryMentions?.join("\n") || "",
+      advertisingLabel: sourceKit.publicationRaw?.advertisingLabel || "",
+      hashtags: sourceKit.publicationRaw?.hashtags?.join(" ") || "",
+      brandMention: sourceKit.publicationRaw?.brandMention || "",
+      approvalRequired: Boolean(sourceKit.publicationRaw?.approvalRequired),
+      allowedPlatforms: sourceKit.publicationRaw?.allowedPlatforms?.join("\n") || "",
+      publicationAccessLevel: sourceKit.publicationRaw?.accessLevel || "DIGITAL",
+      publicationAffiliate: Boolean(sourceKit.publicationRaw?.requiresAffiliateApproval)
+    });
+  };
+
+  const loadPreview = async () => {
     if (!selectedOffer) return;
+    if (!previewCreatorId) {
+      notify("Сначала одобрите заявку креатора и выберите его для предпросмотра");
+      return;
+    }
     try {
-      const nextKit = await onLoadPreview(selectedOffer.id, access);
-      setPreviewKit(nextKit);
+      const raw = await api(`/brand/offers/${selectedOffer.id}/creator-kit/preview-as-creator`, {
+        method: "POST",
+        body: JSON.stringify({
+          source: previewSource,
+          ...(previewCreatorId ? { creatorId: previewCreatorId } : {}),
+          productAccess: previewProduct,
+          affiliateApproval: previewAffiliate
+        })
+      });
+      setPreviewKit(mapCreatorKit(raw, selectedOffer));
     } catch (error) {
       notify(error.message);
     }
   };
 
   useEffect(() => {
-    if (preview && selectedOffer) loadPreview(previewAccess);
-  }, [preview, previewAccess, selectedOffer?.id]);
+    if (!selectedOffer?.creatorKit) return;
+    resetEditor(selectedOffer.creatorKit);
+    setPreviewKit(null);
+    setRestoreDetails(null);
+    loadMetadata(selectedOffer.id).catch((error) => notify(error.message));
+  }, [selectedOffer?.id, selectedOffer?.creatorKit?.revision?.id]);
+
+  useEffect(() => {
+    if (!relevantCreators.some((creator) => creator.id === previewCreatorId)) {
+      setPreviewCreatorId(relevantCreators[0]?.id || "");
+    }
+  }, [selectedOffer?.id, offerRelationships.length]);
+
+  useEffect(() => {
+    if (preview && selectedOffer) loadPreview();
+  }, [preview, previewSource, previewProduct, previewAffiliate, previewCreatorId, selectedOffer?.id]);
+
+  const refresh = async () => {
+    await onReload();
+    if (selectedOffer) await loadMetadata(selectedOffer.id);
+  };
+
+  const updateEditor = (key, value) => setEditor((current) => ({ ...current, [key]: value }));
+  const lines = (value) => String(value || "").split("\n").map((item) => item.trim()).filter(Boolean);
+
+  const saveContent = async () => {
+    if (!selectedOffer || !editor) return;
+    setSaving(true);
+    try {
+      await api(`/brand/offers/${selectedOffer.id}/creator-kit`, {
+        method: "PUT",
+        body: JSON.stringify({
+          brandContent: {
+            description: editor.brandDescription,
+            history: editor.brandHistory,
+            values: lines(editor.brandValues),
+            positioning: editor.brandPositioning,
+            accessLevel: editor.brandAccessLevel,
+            requiresAffiliateApproval: editor.brandAffiliate
+          },
+          productContent: {
+            description: editor.productDescription,
+            benefits: lines(editor.productBenefits),
+            usageInstructions: editor.usageInstructions,
+            accessLevel: editor.productAccessLevel,
+            requiresAffiliateApproval: editor.productAffiliate
+          },
+          facts: editor.facts.filter((item) => item.value.trim()).map((item, index) => ({
+            type: item.type,
+            value: item.value,
+            accessLevel: item.accessLevel || "DIGITAL",
+            requiresAffiliateApproval: Boolean(item.requiresAffiliateApproval),
+            sortOrder: index
+          })),
+          claims: [
+            ...lines(editor.allowedClaims).map((value, index) => ({ type: "ALLOWED", value, accessLevel: "DIGITAL", requiresAffiliateApproval: false, sortOrder: index })),
+            ...lines(editor.forbiddenClaims).map((value, index) => ({ type: "FORBIDDEN", value, accessLevel: "DIGITAL", requiresAffiliateApproval: false, sortOrder: index }))
+          ],
+          rules: lines(editor.rules).map((value, index) => ({ value, accessLevel: "DIGITAL", requiresAffiliateApproval: false, sortOrder: index })),
+          publicationRequirements: {
+            mandatoryMentions: lines(editor.mandatoryMentions),
+            advertisingLabel: editor.advertisingLabel || undefined,
+            hashtags: editor.hashtags.split(/\s+/).filter(Boolean),
+            brandMention: editor.brandMention || undefined,
+            approvalRequired: editor.approvalRequired,
+            allowedPlatforms: lines(editor.allowedPlatforms),
+            accessLevel: editor.publicationAccessLevel,
+            requiresAffiliateApproval: editor.publicationAffiliate
+          }
+        })
+      });
+      await refresh();
+      notify("Черновик Creator Kit сохранён");
+    } catch (error) {
+      notify(error.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveScenario = async () => {
+    if (!selectedOffer) return;
+    const payload = {
+      channel: scenarioForm.channel,
+      title: scenarioForm.title,
+      hook: scenarioForm.hook || undefined,
+      mainIdea: scenarioForm.mainIdea,
+      structure: scenarioForm.structure || undefined,
+      cta: scenarioForm.cta || undefined,
+      accessLevel: scenarioForm.accessLevel,
+      requiresAffiliateApproval: scenarioForm.requiresAffiliateApproval,
+      sortOrder: scenarioForm.id
+        ? selectedOffer.creatorKit.scenarios.find((item) => item.id === scenarioForm.id)?.sortOrder || 0
+        : selectedOffer.creatorKit.scenarios.length
+    };
+    try {
+      await api(
+        scenarioForm.id
+          ? `/brand/offers/${selectedOffer.id}/creator-kit/scenarios/${scenarioForm.id}`
+          : `/brand/offers/${selectedOffer.id}/creator-kit/scenarios`,
+        { method: scenarioForm.id ? "PATCH" : "POST", body: JSON.stringify(payload) }
+      );
+      setScenarioForm({ id: "", channel: "REELS", title: "", hook: "", mainIdea: "", structure: "", cta: "", accessLevel: "DIGITAL", requiresAffiliateApproval: false });
+      await refresh();
+      notify("Сценарий сохранён");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const editScenario = (scenario) => setScenarioForm({
+    id: scenario.id,
+    channel: scenario.channelValue || scenarioChannelValues[scenario.channel] || "REELS",
+    title: scenario.title,
+    hook: scenario.hook || "",
+    mainIdea: scenario.mainIdea || scenario.idea || "",
+    structure: scenario.structure || "",
+    cta: scenario.cta || "",
+    accessLevel: scenario.accessLevel || "DIGITAL",
+    requiresAffiliateApproval: Boolean(scenario.requiresAffiliateApproval)
+  });
+
+  const removeScenario = async (scenarioId) => {
+    try {
+      await api(`/brand/offers/${selectedOffer.id}/creator-kit/scenarios/${scenarioId}`, { method: "DELETE" });
+      await refresh();
+      notify("Сценарий удалён");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const moveScenario = async (scenarioId, direction) => {
+    const ids = selectedOffer.creatorKit.scenarios.map((item) => item.id);
+    const index = ids.indexOf(scenarioId);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= ids.length) return;
+    [ids[index], ids[target]] = [ids[target], ids[index]];
+    try {
+      await api(`/brand/offers/${selectedOffer.id}/creator-kit/scenarios/reorder`, {
+        method: "PUT",
+        body: JSON.stringify({ scenarioIds: ids })
+      });
+      await refresh();
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const publishKit = async () => {
+    try {
+      await api(`/brand/offers/${selectedOffer.id}/creator-kit/publish`, {
+        method: "POST",
+        body: JSON.stringify({ publisherNote: "Публикация из кабинета бренда" })
+      });
+      await refresh();
+      notify("Новая версия Creator Kit опубликована");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const createDraftFromRevision = async (revisionId) => {
+    try {
+      await api(`/brand/offers/${selectedOffer.id}/creator-kit/revisions/${revisionId}/create-draft`, { method: "POST" });
+      await refresh();
+      notify("Черновик создан из выбранной версии");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const previewRestore = async (revisionId) => {
+    try {
+      const details = await api(`/brand/offers/${selectedOffer.id}/creator-kit/revisions/${revisionId}/restore-preview`);
+      setRestoreDetails(details);
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const restoreRevision = async () => {
+    if (!restoreDetails) return;
+    const confirmed = window.confirm(`Будет активирована новая ревизия на основе v${restoreDetails.targetRevision.revisionNumber}. ${restoreDetails.diff.summary}. Продолжить?`);
+    if (!confirmed) return;
+    try {
+      await api(`/brand/offers/${selectedOffer.id}/creator-kit/revisions/${restoreDetails.targetRevision.id}/restore`, {
+        method: "POST",
+        body: JSON.stringify({ expectedActiveRevisionId: restoreDetails.activeRevision.id, publisherNote: "Восстановление из истории" })
+      });
+      setRestoreDetails(null);
+      await refresh();
+      notify("Историческая версия восстановлена новой ревизией");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const changeProductAccess = async (creatorId, active) => {
+    try {
+      await api(`/brand/offers/${selectedOffer.id}/product-access/${creatorId}/${active ? "revoke" : "grant"}`, {
+        method: "POST",
+        body: JSON.stringify({ reason: active ? "Отозвано брендом" : "Ручной Product Access для закрытого пилота" })
+      });
+      await loadMetadata(selectedOffer.id);
+      notify(active ? "Product Access отозван" : "Product Access выдан");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
 
   const submitUpload = async (event) => {
     event.preventDefault();
@@ -1632,6 +1950,7 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
   };
 
   if (!selectedOffer) return <div className="empty-state">Создайте оффер, чтобы заполнить Creator Kit.</div>;
+  if (!kit || !editor) return <div className="empty-state">Загрузка Creator Kit…</div>;
 
   return (
     <div className="brand-kit-manager">
@@ -1652,7 +1971,7 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
           <div className="completion-ring" style={{ "--completion": `${kit.completeness * 3.6}deg` }}>
             <span>{kit.completeness}%</span>
           </div>
-          <div><span>Заполненность Creator Kit</span><strong>Готов к публикации</strong><small>Добавьте срок действия для одного файла</small></div>
+          <div><span>Заполненность Creator Kit</span><strong>{kit.readyToPublish ? "Основные разделы заполнены" : "Требуется заполнение"}</strong><small>{kit.completenessMissing.length ? `Не хватает: ${kit.completenessMissing.join(", ")}` : "Обязательные разделы заполнены"}</small></div>
         </div>
         <div className="stat-card"><span className="stat-label">Скачивания материалов</span><span className="stat-value">—</span><span className="stat-note">не собираются на этапе MVP</span></div>
         <div className="stat-card"><span className="stat-label">Креаторы использовали</span><span className="stat-value">—</span><span className="stat-note">аналитика будет добавлена позднее</span></div>
@@ -1660,6 +1979,83 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
       </div>
 
       {!preview && (
+        <>
+        <section className="panel creator-kit-upload">
+          <div className="panel-header"><div><h2>Содержание Creator Kit</h2><p>Изменения сохраняются в DRAFT и не меняют опубликованную версию до отдельной публикации.</p></div><Status type={kit.revision?.status === "DRAFT" ? "pending" : "success"}>{kit.revision?.status || "DRAFT"}</Status></div>
+          <div className="panel-body">
+            <div className="form-grid">
+              <div className="form-group full"><label className="form-label">Описание бренда</label><textarea className="textarea" value={editor.brandDescription} onChange={(event) => updateEditor("brandDescription", event.target.value)} /></div>
+              <div className="form-group full"><label className="form-label">История бренда</label><textarea className="textarea" value={editor.brandHistory} onChange={(event) => updateEditor("brandHistory", event.target.value)} /></div>
+              <div className="form-group"><label className="form-label">Ценности, по одной в строке</label><textarea className="textarea" value={editor.brandValues} onChange={(event) => updateEditor("brandValues", event.target.value)} /></div>
+              <div className="form-group"><label className="form-label">Позиционирование</label><textarea className="textarea" value={editor.brandPositioning} onChange={(event) => updateEditor("brandPositioning", event.target.value)} /></div>
+              <div className="form-group"><label className="form-label">Доступ к разделу о бренде</label><select className="select-field" value={editor.brandAccessLevel} onChange={(event) => updateEditor("brandAccessLevel", event.target.value)}><option value="DIGITAL">Digital Access</option><option value="PRODUCT">Product Access</option></select></div>
+              <div className="form-group"><label className="form-label">Только одобренным партнёрам</label><label className={editor.brandAffiliate ? "checked" : ""}><input type="checkbox" checked={editor.brandAffiliate} onChange={(event) => updateEditor("brandAffiliate", event.target.checked)} /> Ограничить раздел</label></div>
+              <div className="form-group full"><label className="form-label">Описание продукта</label><textarea className="textarea" value={editor.productDescription} onChange={(event) => updateEditor("productDescription", event.target.value)} /></div>
+              <div className="form-group"><label className="form-label">Преимущества, по одному в строке</label><textarea className="textarea" value={editor.productBenefits} onChange={(event) => updateEditor("productBenefits", event.target.value)} /></div>
+              <div className="form-group"><label className="form-label">Инструкция применения</label><textarea className="textarea" value={editor.usageInstructions} onChange={(event) => updateEditor("usageInstructions", event.target.value)} /></div>
+              <div className="form-group"><label className="form-label">Доступ к информации о продукте</label><select className="select-field" value={editor.productAccessLevel} onChange={(event) => updateEditor("productAccessLevel", event.target.value)}><option value="DIGITAL">Digital Access</option><option value="PRODUCT">Product Access</option></select></div>
+              <div className="form-group"><label className="form-label">Только одобренным партнёрам</label><label className={editor.productAffiliate ? "checked" : ""}><input type="checkbox" checked={editor.productAffiliate} onChange={(event) => updateEditor("productAffiliate", event.target.checked)} /> Ограничить раздел</label></div>
+            </div>
+            <div className="kit-section-heading"><div><h3>Банк фактов</h3><p>Тип каждого факта уникален в пределах ревизии.</p></div><button className="button secondary small" type="button" onClick={() => updateEditor("facts", [...editor.facts, { type: "FEATURES", value: "", accessLevel: "DIGITAL", requiresAffiliateApproval: false }])}>Добавить факт</button></div>
+            <div className="form-grid">
+              {editor.facts.map((fact, index) => (
+                <React.Fragment key={`${fact.type}-${index}`}>
+                  <div className="form-group"><label className="form-label">Тип</label><select className="select-field" value={fact.type} onChange={(event) => updateEditor("facts", editor.facts.map((item, itemIndex) => itemIndex === index ? { ...item, type: event.target.value } : item))}>{Object.entries(factTypeLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></div>
+                  <div className="form-group"><label className="form-label">Уровень</label><select className="select-field" value={fact.accessLevel || "DIGITAL"} onChange={(event) => updateEditor("facts", editor.facts.map((item, itemIndex) => itemIndex === index ? { ...item, accessLevel: event.target.value } : item))}><option value="DIGITAL">Digital</option><option value="PRODUCT">Product</option></select></div>
+                  <div className="form-group full"><label className="form-label">Факт</label><textarea className="textarea" value={fact.value} onChange={(event) => updateEditor("facts", editor.facts.map((item, itemIndex) => itemIndex === index ? { ...item, value: event.target.value } : item))} /><button className="text-button" type="button" onClick={() => updateEditor("facts", editor.facts.filter((_, itemIndex) => itemIndex !== index))}>Удалить факт</button></div>
+                </React.Fragment>
+              ))}
+              <div className="form-group"><label className="form-label">Разрешённые формулировки, по одной в строке</label><textarea className="textarea" value={editor.allowedClaims} onChange={(event) => updateEditor("allowedClaims", event.target.value)} /></div>
+              <div className="form-group"><label className="form-label">Запрещённые формулировки</label><textarea className="textarea" value={editor.forbiddenClaims} onChange={(event) => updateEditor("forbiddenClaims", event.target.value)} /></div>
+              <div className="form-group full"><label className="form-label">Правила продвижения, по одному в строке</label><textarea className="textarea" value={editor.rules} onChange={(event) => updateEditor("rules", event.target.value)} /></div>
+              <div className="form-group"><label className="form-label">Обязательные упоминания</label><textarea className="textarea" value={editor.mandatoryMentions} onChange={(event) => updateEditor("mandatoryMentions", event.target.value)} /></div>
+              <div className="form-group"><label className="form-label">Разрешённые площадки</label><textarea className="textarea" value={editor.allowedPlatforms} onChange={(event) => updateEditor("allowedPlatforms", event.target.value)} /></div>
+              <div className="form-group"><label className="form-label">Маркировка рекламы</label><input className="field" value={editor.advertisingLabel} onChange={(event) => updateEditor("advertisingLabel", event.target.value)} /></div>
+              <div className="form-group"><label className="form-label">Хэштеги</label><input className="field" value={editor.hashtags} onChange={(event) => updateEditor("hashtags", event.target.value)} /></div>
+              <div className="form-group"><label className="form-label">Упоминание бренда</label><input className="field" value={editor.brandMention} onChange={(event) => updateEditor("brandMention", event.target.value)} /></div>
+              <div className="form-group"><label className="form-label">Доступ к требованиям</label><select className="select-field" value={editor.publicationAccessLevel} onChange={(event) => updateEditor("publicationAccessLevel", event.target.value)}><option value="DIGITAL">Digital</option><option value="PRODUCT">Product</option></select></div>
+            </div>
+          </div>
+          <div className="form-actions"><button className="button" type="button" disabled={saving} onClick={saveContent}>{saving ? "Сохраняем…" : "Сохранить черновик"}</button>{kit.revision?.status === "DRAFT" && <button className="button secondary" type="button" onClick={publishKit}>Опубликовать версию</button>}</div>
+        </section>
+
+        <section className="panel creator-kit-upload">
+          <div className="panel-header"><div><h2>Сценарии публикаций</h2><p>Каждый сценарий хранит структуру, CTA и собственный уровень доступа.</p></div></div>
+          <div className="panel-body form-grid">
+            <div className="form-group"><label className="form-label">Канал</label><select className="select-field" value={scenarioForm.channel} onChange={(event) => setScenarioForm({ ...scenarioForm, channel: event.target.value })}>{Object.entries(scenarioChannelLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></div>
+            <div className="form-group"><label className="form-label">Уровень доступа</label><select className="select-field" value={scenarioForm.accessLevel} onChange={(event) => setScenarioForm({ ...scenarioForm, accessLevel: event.target.value })}><option value="DIGITAL">Digital Access</option><option value="PRODUCT">Product Access</option></select></div>
+            <div className="form-group full"><label className="form-label">Название</label><input className="field" value={scenarioForm.title} onChange={(event) => setScenarioForm({ ...scenarioForm, title: event.target.value })} /></div>
+            <div className="form-group"><label className="form-label">Хук</label><textarea className="textarea" value={scenarioForm.hook} onChange={(event) => setScenarioForm({ ...scenarioForm, hook: event.target.value })} /></div>
+            <div className="form-group"><label className="form-label">Основная идея</label><textarea className="textarea" value={scenarioForm.mainIdea} onChange={(event) => setScenarioForm({ ...scenarioForm, mainIdea: event.target.value })} /></div>
+            <div className="form-group"><label className="form-label">Структура</label><textarea className="textarea" value={scenarioForm.structure} onChange={(event) => setScenarioForm({ ...scenarioForm, structure: event.target.value })} /></div>
+            <div className="form-group"><label className="form-label">CTA</label><textarea className="textarea" value={scenarioForm.cta} onChange={(event) => setScenarioForm({ ...scenarioForm, cta: event.target.value })} /></div>
+            <div className="form-group full"><label><input type="checkbox" checked={scenarioForm.requiresAffiliateApproval} onChange={(event) => setScenarioForm({ ...scenarioForm, requiresAffiliateApproval: event.target.checked })} /> Только для одобренных партнёров</label></div>
+          </div>
+          <div className="form-actions"><button className="button" type="button" onClick={saveScenario}>{scenarioForm.id ? "Сохранить сценарий" : "Добавить сценарий"}</button>{scenarioForm.id && <button className="button secondary" type="button" onClick={() => setScenarioForm({ id: "", channel: "REELS", title: "", hook: "", mainIdea: "", structure: "", cta: "", accessLevel: "DIGITAL", requiresAffiliateApproval: false })}>Отмена</button>}</div>
+          <div className="panel-body">
+            {(selectedOffer.creatorKit.scenarios || []).map((scenario, index) => <div className="requirement-row" key={scenario.id}><span>{index + 1}. {scenario.channel} · {scenario.accessLevel}</span><strong>{scenario.title}</strong><div className="row-actions"><button className="text-button" type="button" onClick={() => moveScenario(scenario.id, -1)}>Выше</button><button className="text-button" type="button" onClick={() => moveScenario(scenario.id, 1)}>Ниже</button><button className="text-button" type="button" onClick={() => editScenario(scenario)}>Изменить</button><button className="text-button" type="button" onClick={() => removeScenario(scenario.id)}>Удалить</button></div></div>)}
+          </div>
+        </section>
+
+        <section className="panel creator-kit-upload">
+          <div className="panel-header"><div><h2>Product Access для пилота</h2><p>Ручной доступ не подтверждает отправку или получение физического образца. Все изменения журналируются.</p></div></div>
+          <div className="panel-body">
+            {relevantCreators.map((creator) => {
+              const active = productAccess.some((grant) => grant.creatorId === creator.id && grant.status === "ACTIVE");
+              return <div className="requirement-row" key={creator.id}><span>{creator.displayName}</span><strong>{active ? "Product Access открыт" : "Только Digital Access"}</strong><button className={`button small ${active ? "secondary" : ""}`} type="button" onClick={() => changeProductAccess(creator.id, active)}>{active ? "Отозвать" : "Выдать доступ"}</button></div>;
+            })}
+            {!relevantCreators.length && <div className="empty-state">Product Access можно выдать после одобрения заявки креатора.</div>}
+          </div>
+        </section>
+
+        <section className="panel creator-kit-upload">
+          <div className="panel-header"><div><h2>История ревизий</h2><p>Опубликованные версии неизменяемы. Restore всегда создаёт новую ревизию.</p></div></div>
+          <div className="panel-body">
+            {revisions.map((revision) => <div className="requirement-row" key={revision.id}><span>v{revision.revisionNumber} · {revision.status}</span><strong>{revision.changeSummary || "Черновик"}</strong><div className="row-actions">{revision.status !== "DRAFT" && <button className="text-button" type="button" onClick={() => previewRestore(revision.id)}>Предпросмотр restore</button>}<button className="text-button" type="button" onClick={() => createDraftFromRevision(revision.id)}>Создать черновик</button></div></div>)}
+            {restoreDetails && <div className="creator-warning compact-warning"><span className="warning-mark">!</span><div><strong>Будет создана новая активная версия на основе v{restoreDetails.targetRevision.revisionNumber}</strong><p>{restoreDetails.diff.summary}. Заполненность: {restoreDetails.beforeCompletion.percent}% → {restoreDetails.afterCompletion.percent}%.</p><button className="button small" type="button" onClick={restoreRevision}>Подтвердить восстановление</button></div></div>}
+          </div>
+        </section>
+
         <form className="creator-kit-upload panel" onSubmit={submitUpload}>
           <div className="panel-header"><div><h2>Добавить материал</h2><p>Файл загружается напрямую в приватное хранилище и подтверждается сервером.</p></div></div>
           {!uploadAllowed && (
@@ -1695,25 +2091,31 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
           </div>
           <div className="form-actions"><button className="button" type="submit" disabled={uploading || !uploadAllowed}>{uploading ? "Загрузка…" : "Загрузить материал"}</button></div>
         </form>
+        </>
       )}
 
       {preview && (
+        <>
         <div className="preview-notice">
           <div>
             <strong>Предпросмотр глазами креатора</strong>
-            <span>{previewAccess === "digital" ? "До получения физического образца" : "После подтверждённого получения образца"}</span>
+            <span>Симуляция не создаёт партнёрскую связь и не выдаёт Product Access.</span>
           </div>
-          <div className="access-preview-switch">
-            <button className={previewAccess === "digital" ? "active" : ""} onClick={() => setPreviewAccess("digital")}>Digital Access</button>
-            <button className={previewAccess === "product" ? "active" : ""} onClick={() => setPreviewAccess("product")}>Product Access</button>
-          </div>
+          <button className="button secondary small" type="button" onClick={loadPreview}>Обновить preview</button>
         </div>
+        <div className="brand-kit-toolbar preview-controls">
+          <div className="form-group"><label className="form-label">Версия</label><select className="select-field" value={previewSource} onChange={(event) => setPreviewSource(event.target.value)}><option value="DRAFT">Текущий черновик</option><option value="PUBLISHED">Опубликованная версия</option></select></div>
+          <div className="form-group"><label className="form-label">Креатор</label><select className="select-field" value={previewCreatorId} onChange={(event) => setPreviewCreatorId(event.target.value)}><option value="">Выберите креатора</option>{relevantCreators.map((creator) => <option value={creator.id} key={creator.id}>{creator.displayName}</option>)}</select></div>
+          <div className="form-group"><label className="form-label">Product Access</label><select className="select-field" value={previewProduct} onChange={(event) => setPreviewProduct(event.target.value)}><option value="NOT_GRANTED">Нет</option><option value="GRANTED">Есть</option>{previewCreatorId && <option value="ACTUAL">Фактический</option>}</select></div>
+          <div className="form-group"><label className="form-label">Affiliate approval</label><select className="select-field" value={previewAffiliate} onChange={(event) => setPreviewAffiliate(event.target.value)}><option value="INACTIVE">Нет</option><option value="ACTIVE">Есть</option>{previewCreatorId && <option value="ACTUAL">Фактический</option>}</select></div>
+        </div>
+        </>
       )}
 
       <CreatorKit
         offer={displayedOffer}
         mode={preview ? "creator" : "brand"}
-        hasProductAccess={preview && previewAccess === "product"}
+        hasProductAccess={preview ? Boolean(previewKit?.accessContext?.hasProductAccess) : false}
         notify={notify}
         onToggleAsset={onToggleAsset}
         onDownloadAsset={onDownloadAsset}
@@ -1722,7 +2124,7 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
   );
 }
 
-function BrandDashboard({ user, offers, applications, relationships, finance, orderImportPreview, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview, transitionOffer, onUploadOrders, onConfirmOrders }) {
+function BrandDashboard({ user, offers, applications, relationships, finance, orderImportPreview, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onReload, transitionOffer, onUploadOrders, onConfirmOrders }) {
   const [tab, setTab] = useState("offers");
 
   return (
@@ -1900,7 +2302,7 @@ function BrandDashboard({ user, offers, applications, relationships, finance, or
       )}
 
       {tab === "tracking" && <SalesTrackingLive notify={notify} preview={orderImportPreview} onUpload={onUploadOrders} onConfirm={onConfirmOrders} />}
-      {tab === "creatorKit" && <BrandCreatorKitManager offers={offers} verificationStatus={user?.profile?.verificationStatus} notify={notify} onToggleAsset={onToggleAsset} onDownloadAsset={onDownloadAsset} onUploadAsset={onUploadAsset} onLoadPreview={onLoadPreview} />}
+      {tab === "creatorKit" && <BrandCreatorKitManager offers={offers} relationships={relationships} verificationStatus={user?.profile?.verificationStatus} notify={notify} onToggleAsset={onToggleAsset} onDownloadAsset={onDownloadAsset} onUploadAsset={onUploadAsset} onReload={onReload} />}
     </DashboardLayout>
   );
 }
@@ -1942,13 +2344,39 @@ function CreateOfferPage({ publish, navigate, initialOffer }) {
   };
   const previewOffer = {
     ...previewBase,
-    creatorKit: {
-      ...buildCreatorKit(previewBase),
-      promotionWithoutSample: form.promotionWithoutSample,
-      allowedDigitalFormats: form.allowedDigitalFormats,
-      allowedClaims: form.allowedClaims.split(";").map((item) => item.trim()).filter(Boolean),
-      forbiddenClaims: form.forbiddenClaims.split(";").map((item) => item.trim()).filter(Boolean)
-    }
+    creatorKit: mapCreatorKit({
+      brandContent: null,
+      productContent: {
+        description: form.description,
+        benefits: [],
+        usageInstructions: null,
+        accessLevel: "DIGITAL",
+        requiresAffiliateApproval: false
+      },
+      assets: [],
+      scenarios: [],
+      facts: [],
+      claims: [
+        ...form.allowedClaims.split(";").map((value) => value.trim()).filter(Boolean).map((value, index) => ({ type: "ALLOWED", value, accessLevel: "DIGITAL", requiresAffiliateApproval: false, sortOrder: index })),
+        ...form.forbiddenClaims.split(";").map((value) => value.trim()).filter(Boolean).map((value, index) => ({ type: "FORBIDDEN", value, accessLevel: "DIGITAL", requiresAffiliateApproval: false, sortOrder: index }))
+      ],
+      rules: [],
+      publicationRequirements: {
+        mandatoryMentions: form.publicationRequirements ? [form.publicationRequirements] : [],
+        advertisingLabel: null,
+        hashtags: [],
+        brandMention: null,
+        approvalRequired: false,
+        allowedPlatforms: [],
+        accessLevel: "DIGITAL",
+        requiresAffiliateApproval: false
+      },
+      offerPolicy: {
+        promotionWithoutProduct: form.promotionWithoutSample === "yes" ? "YES" : form.promotionWithoutSample === "no" ? "NO" : "LIMITED",
+        allowedPromotionFormats: form.allowedDigitalFormats
+      },
+      completeness: { percent: 0, missingSections: ["О бренде", "Сценарии", "Материалы"] }
+    }, previewBase)
   };
 
   return (
@@ -1991,7 +2419,7 @@ function CreateOfferPage({ publish, navigate, initialOffer }) {
                 <div className="policy-options">
                   {[
                     ["yes", "Да", "Все материалы Digital Access доступны после одобрения заявки."],
-                    ["no", "Нет, продукт обязателен", "Материалы откроются только после подтверждённого получения образца."],
+                    ["no", "Нет, продукт обязателен", "Материалы откроются только после ручной выдачи Product Access брендом."],
                     ["restricted", "Да, но только в разрешённых форматах", "Креатор увидит выбранные форматы и правила без личного тестирования."]
                   ].map(([value, title, copy]) => (
                     <label className={`policy-option ${form.promotionWithoutSample === value ? "selected" : ""}`} key={value}>
@@ -2023,10 +2451,10 @@ function CreateOfferPage({ publish, navigate, initialOffer }) {
                 </div>
                 <div className="material-type-grid">
                   {["Фото", "Вертикальные видео", "Горизонтальные видео", "PNG без фона", "Логотипы", "Lifestyle-контент", "Видео текстуры", "Видео использования", "Рекламные баннеры"].map((type, index) => (
-                    <span className={index < 6 ? "filled" : ""} key={type}>{type}<small>{index < 6 ? "Добавлено" : "Не добавлено"}</small></span>
+                    <span key={type}>{type}<small>Не добавлено</small></span>
                   ))}
                 </div>
-                <div className="upload-box">Добавить материал и настроить: формат, редактирование, текст, платную рекламу, согласование и срок действия</div>
+                <div className="upload-box">Реальная загрузка материалов доступна после сохранения оффера в разделе Creator Kit кабинета бренда.</div>
               </div>
 
               <div className="creator-kit-form-block">
@@ -2067,7 +2495,7 @@ function CreateOfferPage({ publish, navigate, initialOffer }) {
               <div className="panel-body">
                 <span className="term-label">Creator Kit</span>
                 <strong style={{ display: "block", marginTop: 5 }}>Digital Access · {form.allowedDigitalFormats.length} форматов</strong>
-                <span className="stat-note">Product Access откроется после получения образца</span>
+                <span className="stat-note">Product Access выдаётся брендом вручную в закрытом пилоте</span>
               </div>
             </div>
           </aside>
@@ -2282,31 +2710,55 @@ const factTypeValues = Object.fromEntries(Object.entries(factTypeLabels).map(([k
 function creatorKitPayload(kit) {
   const requirements = kit.publicationRequirements || {};
   return {
+    brandContent: {
+      description: kit.brandContent?.description || undefined,
+      history: kit.brandContent?.history || undefined,
+      values: kit.brandContent?.values || [],
+      positioning: kit.brandContent?.positioning || undefined,
+      accessLevel: kit.brandContent?.accessLevel || "DIGITAL",
+      requiresAffiliateApproval: Boolean(kit.brandContent?.requiresAffiliateApproval)
+    },
+    productContent: {
+      description: kit.productContent?.description || undefined,
+      benefits: kit.productContent?.benefits || [],
+      usageInstructions: kit.productContent?.usageInstructions || undefined,
+      accessLevel: kit.productContent?.accessLevel || "DIGITAL",
+      requiresAffiliateApproval: Boolean(kit.productContent?.requiresAffiliateApproval)
+    },
     scenarios: (kit.scenarios || []).map((scenario, index) => ({
-      channel: scenarioChannelValues[scenario.channel] || scenario.channel,
+      channel: scenario.channelValue || scenarioChannelValues[scenario.channel] || scenario.channel,
       title: scenario.title,
-      idea: scenario.idea,
+      mainIdea: scenario.mainIdea || scenario.idea,
+      hook: scenario.hook || undefined,
+      structure: scenario.structure || undefined,
+      cta: scenario.cta || undefined,
       accessLevel: scenario.accessLevel || "DIGITAL",
       requiresAffiliateApproval: scenario.requiresAffiliateApproval || false,
       sortOrder: index
     })),
-    facts: Object.entries(kit.facts || {}).filter(([, value]) => value).map(([label, value], index) => ({
-      type: factTypeValues[label] || label,
-      value: String(value),
-      sortOrder: index
-    })),
+    facts: kit.factsRaw?.length
+      ? kit.factsRaw.map((fact, index) => ({ ...fact, sortOrder: index }))
+      : Object.entries(kit.facts || {}).filter(([, value]) => value).map(([label, value], index) => ({
+          type: factTypeValues[label] || label,
+          value: String(value),
+          accessLevel: "DIGITAL",
+          requiresAffiliateApproval: false,
+          sortOrder: index
+        })),
     claims: [
-      ...(kit.allowedClaims || []).map((value, index) => ({ type: "ALLOWED", value, sortOrder: index })),
-      ...(kit.forbiddenClaims || []).map((value, index) => ({ type: "FORBIDDEN", value, sortOrder: index }))
+      ...(kit.allowedClaims || []).map((value, index) => ({ type: "ALLOWED", value, accessLevel: "DIGITAL", requiresAffiliateApproval: false, sortOrder: index })),
+      ...(kit.forbiddenClaims || []).map((value, index) => ({ type: "FORBIDDEN", value, accessLevel: "DIGITAL", requiresAffiliateApproval: false, sortOrder: index }))
     ],
-    rules: (kit.noSampleRules || []).map((value, index) => ({ value, sortOrder: index })),
+    rules: (kit.noSampleRules || []).map((value, index) => ({ value, accessLevel: "DIGITAL", requiresAffiliateApproval: false, sortOrder: index })),
     publicationRequirements: {
       mandatoryMentions: requirements["Обязательные упоминания"] ? [requirements["Обязательные упоминания"]] : [],
       advertisingLabel: requirements["Маркировка рекламы"] || undefined,
       hashtags: requirements["Хэштеги"] ? requirements["Хэштеги"].split(/\s+/).filter(Boolean) : [],
       brandMention: requirements["Упоминание бренда"] || undefined,
       approvalRequired: requirements["Согласование"]?.toLowerCase().includes("нужно") || requirements["Согласование"] === "Требуется",
-      allowedPlatforms: requirements["Разрешённые площадки"] ? requirements["Разрешённые площадки"].split(",").map((item) => item.trim()).filter(Boolean) : []
+      allowedPlatforms: requirements["Разрешённые площадки"] ? requirements["Разрешённые площадки"].split(",").map((item) => item.trim()).filter(Boolean) : [],
+      accessLevel: kit.publicationRaw?.accessLevel || "DIGITAL",
+      requiresAffiliateApproval: Boolean(kit.publicationRaw?.requiresAffiliateApproval)
     }
   };
 }
@@ -2779,7 +3231,13 @@ function App() {
         method: "PUT",
         body: JSON.stringify(creatorKitPayload(offer.creatorKit))
       });
-      if (shouldPublish) await api(`/brand/offers/${saved.id}/publish`, { method: "POST" });
+      if (shouldPublish) {
+        await api(`/brand/offers/${saved.id}/creator-kit/publish`, {
+          method: "POST",
+          body: JSON.stringify({ publisherNote: "Первая версия при публикации оффера" })
+        });
+        await api(`/brand/offers/${saved.id}/publish`, { method: "POST" });
+      }
       await loadOffers("brand");
       notify(shouldPublish ? "Оффер сохранён и опубликован" : "Черновик сохранён");
       navigate("brand");
@@ -2852,12 +3310,6 @@ function App() {
     }
   };
 
-  const loadCreatorKitPreview = async (offerId, access) => {
-    const kit = await api(`/brand/offers/${offerId}/creator-kit/preview?accessLevel=${access.toUpperCase()}`);
-    const offer = offers.find((item) => item.id === offerId);
-    return mapCreatorKit(kit, offer);
-  };
-
   if (!sessionReady) return <div className="app"><main className="auth-main"><div className="auth-panel"><h2>Загрузка сессии…</h2></div></main></div>;
 
   return (
@@ -2869,7 +3321,7 @@ function App() {
       {page === "register" && <RegisterPage presetRole={registerRole} complete={completeRegistration} navigate={navigate} />}
       {page === "login" && <LoginPage login={login} verifyMfa={verifyMfa} navigate={navigate} />}
       {page === "creator" && role === "creator" && <CreatorDashboard user={user} applications={applications} relationships={relationships} offers={offers} finance={creatorFinance} cancelApplication={cancelApplication} copyValue={copyValue} navigate={navigate} />}
-      {page === "brand" && role === "brand" && <BrandDashboard user={user} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} />}
+      {page === "brand" && role === "brand" && <BrandDashboard user={user} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onReload={() => loadOffers("brand")} transitionOffer={transitionOffer} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} />}
       {page === "create" && role === "brand" && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} />}
       {page === "admin" && role === "admin" && <AdminDashboard user={user} offers={offers} brands={adminBrands} operationalReadiness={operationalReadiness} finance={adminFinance} createPayout={createPayout} approvePayout={approvePayout} markPayoutPaid={markPayoutPaid} cancelPayout={cancelPayout} verifyBrand={verifyBrand} changeAdminPassword={changeAdminPassword} beginAdminMfa={beginAdminMfa} confirmAdminMfa={confirmAdminMfa} />}
       {toast && <div className="toast" role="status">{toast}</div>}

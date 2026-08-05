@@ -94,6 +94,17 @@ enum CreatorKitClaimType {
   FORBIDDEN
 }
 
+enum CreatorKitRevisionStatus {
+  DRAFT
+  PUBLISHED
+  SUPERSEDED
+}
+
+enum CreatorProductAccessStatus {
+  ACTIVE
+  REVOKED
+}
+
 enum OfferApplicationStatus {
   PENDING
   APPROVED
@@ -206,6 +217,10 @@ model User {
   payoutsPaid          Payout[]           @relation("PayoutPaidBy")
   payoutsCancelled     Payout[]           @relation("PayoutCancelledBy")
   brandsVerified       BrandProfile[]     @relation("BrandVerifier")
+  creatorKitRevisionsCreated   CreatorKitRevision[]       @relation("CreatorKitRevisionCreatedBy")
+  creatorKitRevisionsPublished CreatorKitRevision[]       @relation("CreatorKitRevisionPublishedBy")
+  productAccessGranted         CreatorProductAccessGrant[] @relation("ProductAccessGrantedBy")
+  productAccessRevoked         CreatorProductAccessGrant[] @relation("ProductAccessRevokedBy")
   createdAt            DateTime           @default(now())
   updatedAt            DateTime           @updatedAt
 
@@ -249,6 +264,7 @@ model CreatorProfile {
   commissions            Commission[]
   ledgerEntries          LedgerEntry[]
   payouts                Payout[]
+  productAccessGrants    CreatorProductAccessGrant[]
   createdAt              DateTime                @default(now())
   updatedAt              DateTime                @updatedAt
 }
@@ -275,6 +291,7 @@ model Offer {
   clicks                  Click[]
   orders                  Order[]
   commissions             Commission[]
+  productAccessGrants     CreatorProductAccessGrant[]
   createdAt               DateTime                @default(now())
   updatedAt               DateTime                @updatedAt
 
@@ -283,17 +300,22 @@ model Offer {
 }
 
 model CreatorKit {
-  id                      String                   @id @default(uuid()) @db.Uuid
-  offerId                 String                   @unique @db.Uuid
-  offer                   Offer                    @relation(fields: [offerId], references: [id], onDelete: Restrict)
-  assets                  CreatorKitAsset[]
-  scenarios               CreatorKitScenario[]
-  facts                   CreatorKitFact[]
-  claims                  CreatorKitClaim[]
-  rules                   CreatorKitRule[]
-  publicationRequirements PublicationRequirements?
-  createdAt               DateTime                 @default(now())
-  updatedAt               DateTime                 @updatedAt
+  id               String              @id @default(uuid()) @db.Uuid
+  offerId          String              @unique @db.Uuid
+  activeRevisionId String?             @unique @db.Uuid
+  draftRevisionId  String?             @unique @db.Uuid
+  offer            Offer               @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  assets           CreatorKitAsset[]
+  legacyScenarios  CreatorKitScenario[]          @relation("LegacyCreatorKitScenarios")
+  legacyFacts      CreatorKitFact[]              @relation("LegacyCreatorKitFacts")
+  legacyClaims     CreatorKitClaim[]             @relation("LegacyCreatorKitClaims")
+  legacyRules      CreatorKitRule[]              @relation("LegacyCreatorKitRules")
+  legacyPublicationRequirements PublicationRequirements? @relation("LegacyCreatorKitPublicationRequirements")
+  revisions        CreatorKitRevision[] @relation("CreatorKitRevisions")
+  activeRevision   CreatorKitRevision? @relation("CreatorKitActiveRevision", fields: [activeRevisionId], references: [id], onDelete: Restrict)
+  draftRevision    CreatorKitRevision? @relation("CreatorKitDraftRevision", fields: [draftRevisionId], references: [id], onDelete: Restrict)
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
 }
 
 model CreatorKitAsset {
@@ -319,6 +341,7 @@ model CreatorKitAsset {
   disabledAt                DateTime?
   deletedAt                 DateTime?
   creatorKit                CreatorKit                 @relation(fields: [creatorKitId], references: [id], onDelete: Restrict)
+  revisionAssets            CreatorKitRevisionAsset[]
   createdAt                 DateTime                   @default(now())
   updatedAt                 DateTime                   @updatedAt
 
@@ -328,71 +351,208 @@ model CreatorKitAsset {
 
 model CreatorKitScenario {
   id                        String                    @id @default(uuid()) @db.Uuid
-  creatorKitId              String                    @db.Uuid
+  creatorKitId              String?                   @db.Uuid
+  revisionId                String                    @db.Uuid
   channel                   CreatorKitScenarioChannel
   title                     String                    @db.VarChar(200)
-  idea                      String
+  mainIdea                  String                    @map("idea")
+  hook                      String?
+  structure                 String?
+  cta                       String?
   accessLevel               CreatorKitAccessLevel     @default(DIGITAL)
   requiresAffiliateApproval Boolean                   @default(false)
   sortOrder                 Int                       @default(0)
-  creatorKit                CreatorKit                @relation(fields: [creatorKitId], references: [id], onDelete: Restrict)
+  creatorKit                CreatorKit?               @relation("LegacyCreatorKitScenarios", fields: [creatorKitId], references: [id], onDelete: Restrict)
+  revision                  CreatorKitRevision        @relation(fields: [revisionId], references: [id], onDelete: Restrict)
   createdAt                 DateTime                  @default(now())
   updatedAt                 DateTime                  @updatedAt
 
   @@index([creatorKitId, accessLevel, sortOrder])
+  @@index([revisionId, accessLevel, sortOrder])
 }
 
 model CreatorKitFact {
-  id           String             @id @default(uuid()) @db.Uuid
-  creatorKitId String             @db.Uuid
-  type         CreatorKitFactType
-  value        String
-  sortOrder    Int                @default(0)
-  creatorKit   CreatorKit         @relation(fields: [creatorKitId], references: [id], onDelete: Restrict)
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
+  id                        String                @id @default(uuid()) @db.Uuid
+  creatorKitId              String?               @db.Uuid
+  revisionId                String                @db.Uuid
+  type                      CreatorKitFactType
+  value                     String
+  accessLevel               CreatorKitAccessLevel @default(DIGITAL)
+  requiresAffiliateApproval Boolean               @default(false)
+  sortOrder                 Int                   @default(0)
+  creatorKit                CreatorKit?           @relation("LegacyCreatorKitFacts", fields: [creatorKitId], references: [id], onDelete: Restrict)
+  revision                  CreatorKitRevision    @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  createdAt                 DateTime               @default(now())
+  updatedAt                 DateTime               @updatedAt
 
   @@unique([creatorKitId, type])
   @@index([creatorKitId, sortOrder])
+  @@unique([revisionId, type])
+  @@index([revisionId, accessLevel, sortOrder])
 }
 
 model CreatorKitClaim {
-  id           String              @id @default(uuid()) @db.Uuid
-  creatorKitId String              @db.Uuid
-  type         CreatorKitClaimType
-  value        String
-  sortOrder    Int                 @default(0)
-  creatorKit   CreatorKit          @relation(fields: [creatorKitId], references: [id], onDelete: Restrict)
-  createdAt    DateTime            @default(now())
-  updatedAt    DateTime            @updatedAt
+  id                        String                @id @default(uuid()) @db.Uuid
+  creatorKitId              String?               @db.Uuid
+  revisionId                String                @db.Uuid
+  type                      CreatorKitClaimType
+  value                     String
+  accessLevel               CreatorKitAccessLevel @default(DIGITAL)
+  requiresAffiliateApproval Boolean               @default(false)
+  sortOrder                 Int                   @default(0)
+  creatorKit                CreatorKit?           @relation("LegacyCreatorKitClaims", fields: [creatorKitId], references: [id], onDelete: Restrict)
+  revision                  CreatorKitRevision    @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  createdAt                 DateTime               @default(now())
+  updatedAt                 DateTime               @updatedAt
 
   @@index([creatorKitId, type, sortOrder])
+  @@index([revisionId, type, accessLevel, sortOrder])
 }
 
 model CreatorKitRule {
-  id           String     @id @default(uuid()) @db.Uuid
-  creatorKitId String     @db.Uuid
-  value        String
-  sortOrder    Int        @default(0)
-  creatorKit   CreatorKit @relation(fields: [creatorKitId], references: [id], onDelete: Restrict)
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  id                        String                @id @default(uuid()) @db.Uuid
+  creatorKitId              String?               @db.Uuid
+  revisionId                String                @db.Uuid
+  value                     String
+  accessLevel               CreatorKitAccessLevel @default(DIGITAL)
+  requiresAffiliateApproval Boolean               @default(false)
+  sortOrder                 Int                   @default(0)
+  creatorKit                CreatorKit?           @relation("LegacyCreatorKitRules", fields: [creatorKitId], references: [id], onDelete: Restrict)
+  revision                  CreatorKitRevision    @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  createdAt                 DateTime               @default(now())
+  updatedAt                 DateTime               @updatedAt
 
   @@index([creatorKitId, sortOrder])
+  @@index([revisionId, accessLevel, sortOrder])
 }
 
 model PublicationRequirements {
-  id                String     @id @default(uuid()) @db.Uuid
-  creatorKitId      String     @unique @db.Uuid
-  mandatoryMentions String[]   @default([])
-  advertisingLabel  String?
-  hashtags          String[]   @default([])
-  brandMention      String?    @db.VarChar(200)
-  approvalRequired  Boolean    @default(false)
-  allowedPlatforms  String[]   @default([])
-  creatorKit        CreatorKit @relation(fields: [creatorKitId], references: [id], onDelete: Restrict)
-  createdAt         DateTime   @default(now())
-  updatedAt         DateTime   @updatedAt
+  id                        String                @id @default(uuid()) @db.Uuid
+  creatorKitId              String?               @unique @db.Uuid
+  revisionId                String                @unique @db.Uuid
+  mandatoryMentions         String[]              @default([])
+  advertisingLabel          String?
+  hashtags                  String[]              @default([])
+  brandMention              String?               @db.VarChar(200)
+  approvalRequired          Boolean               @default(false)
+  allowedPlatforms          String[]              @default([])
+  accessLevel               CreatorKitAccessLevel @default(DIGITAL)
+  requiresAffiliateApproval Boolean               @default(false)
+  creatorKit                CreatorKit?           @relation("LegacyCreatorKitPublicationRequirements", fields: [creatorKitId], references: [id], onDelete: Restrict)
+  revision                  CreatorKitRevision    @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  createdAt                 DateTime               @default(now())
+  updatedAt                 DateTime               @updatedAt
+}
+
+model CreatorKitRevision {
+  id                    String                   @id @default(uuid()) @db.Uuid
+  creatorKitId          String                   @db.Uuid
+  revisionNumber        Int
+  status                CreatorKitRevisionStatus @default(DRAFT)
+  basedOnRevisionId     String?                  @db.Uuid
+  snapshotSchemaVersion Int                      @default(1)
+  snapshot              Json?
+  changeSummary         String?                  @db.VarChar(1000)
+  changeSet             Json?
+  publisherNote         String?                  @db.VarChar(1000)
+  completenessPercent   Int                      @default(0)
+  completenessDetails   Json?
+  createdByUserId       String                   @db.Uuid
+  publishedByUserId     String?                  @db.Uuid
+  publishedAt           DateTime?
+  creatorKit            CreatorKit               @relation("CreatorKitRevisions", fields: [creatorKitId], references: [id], onDelete: Restrict)
+  activeFor             CreatorKit?              @relation("CreatorKitActiveRevision")
+  draftFor              CreatorKit?              @relation("CreatorKitDraftRevision")
+  basedOnRevision       CreatorKitRevision?      @relation("CreatorKitRevisionDerivation", fields: [basedOnRevisionId], references: [id], onDelete: Restrict)
+  derivedRevisions      CreatorKitRevision[]     @relation("CreatorKitRevisionDerivation")
+  createdBy             User                     @relation("CreatorKitRevisionCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  publishedBy           User?                    @relation("CreatorKitRevisionPublishedBy", fields: [publishedByUserId], references: [id], onDelete: Restrict)
+  brandContent          CreatorKitBrandContent?
+  productContent        CreatorKitProductContent?
+  assets                CreatorKitRevisionAsset[]
+  scenarios             CreatorKitScenario[]
+  facts                 CreatorKitFact[]
+  claims                CreatorKitClaim[]
+  rules                  CreatorKitRule[]
+  publicationRequirements PublicationRequirements?
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
+
+  @@unique([creatorKitId, revisionNumber])
+  @@index([creatorKitId, status])
+  @@index([basedOnRevisionId])
+  @@index([publishedAt])
+}
+
+model CreatorKitBrandContent {
+  id                        String                @id @default(uuid()) @db.Uuid
+  revisionId                String                @unique @db.Uuid
+  description               String?
+  history                   String?
+  values                    String[]              @default([])
+  positioning               String?
+  accessLevel               CreatorKitAccessLevel @default(DIGITAL)
+  requiresAffiliateApproval Boolean               @default(false)
+  revision                  CreatorKitRevision    @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  createdAt                 DateTime               @default(now())
+  updatedAt                 DateTime               @updatedAt
+}
+
+model CreatorKitProductContent {
+  id                        String                @id @default(uuid()) @db.Uuid
+  revisionId                String                @unique @db.Uuid
+  description               String?
+  benefits                  String[]              @default([])
+  usageInstructions         String?
+  accessLevel               CreatorKitAccessLevel @default(DIGITAL)
+  requiresAffiliateApproval Boolean               @default(false)
+  revision                  CreatorKitRevision    @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  createdAt                 DateTime               @default(now())
+  updatedAt                 DateTime               @updatedAt
+}
+
+model CreatorKitRevisionAsset {
+  id                        String                @id @default(uuid()) @db.Uuid
+  revisionId                String                @db.Uuid
+  assetId                   String                @db.Uuid
+  title                     String                @db.VarChar(200)
+  accessLevel               CreatorKitAccessLevel
+  requiresAffiliateApproval Boolean               @default(false)
+  editable                  Boolean               @default(false)
+  textAllowed               Boolean               @default(false)
+  paidAdsAllowed            Boolean               @default(false)
+  approvalRequired          Boolean               @default(false)
+  expiresAt                 DateTime?
+  sortOrder                 Int                   @default(0)
+  revision                  CreatorKitRevision    @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  asset                     CreatorKitAsset       @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  createdAt                 DateTime               @default(now())
+  updatedAt                 DateTime               @updatedAt
+
+  @@unique([revisionId, assetId])
+  @@index([revisionId, accessLevel, sortOrder])
+  @@index([assetId])
+}
+
+model CreatorProductAccessGrant {
+  id              String                     @id @default(uuid()) @db.Uuid
+  offerId         String                     @db.Uuid
+  creatorId       String                     @db.Uuid
+  status          CreatorProductAccessStatus @default(ACTIVE)
+  grantedByUserId String                     @db.Uuid
+  grantedAt       DateTime                   @default(now())
+  revokedByUserId String?                    @db.Uuid
+  revokedAt       DateTime?
+  reason          String?                    @db.VarChar(500)
+  offer           Offer                      @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  creator         CreatorProfile             @relation(fields: [creatorId], references: [id], onDelete: Restrict)
+  grantedBy       User                       @relation("ProductAccessGrantedBy", fields: [grantedByUserId], references: [id], onDelete: Restrict)
+  revokedBy       User?                      @relation("ProductAccessRevokedBy", fields: [revokedByUserId], references: [id], onDelete: Restrict)
+  createdAt       DateTime                   @default(now())
+  updatedAt       DateTime                   @updatedAt
+
+  @@index([offerId, status])
+  @@index([creatorId, status])
 }
 
 model OfferApplication {

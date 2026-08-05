@@ -1999,6 +1999,20 @@ p {
   width: min(100%, 470px);
 }
 
+.brand-kit-toolbar.preview-controls {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.brand-kit-toolbar.preview-controls .form-group {
+  width: 100%;
+}
+
+.brand-kit-manager .requirement-row {
+  grid-template-columns: 140px minmax(0, 1fr) auto;
+  align-items: center;
+}
+
 .kit-analytics-grid {
   display: grid;
   grid-template-columns: 1.35fr repeat(3, 1fr);
@@ -2900,6 +2914,16 @@ p {
   .preview-notice {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .brand-kit-toolbar.preview-controls {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .brand-kit-manager .requirement-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
   }
 
   .access-badge {

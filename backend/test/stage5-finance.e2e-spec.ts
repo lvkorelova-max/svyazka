@@ -131,14 +131,22 @@ describe('Stage 5A financial hardening', () => {
     await prisma.order.deleteMany();
     await prisma.orderImport.deleteMany();
     await prisma.click.deleteMany();
+    await prisma.creatorProductAccessGrant.deleteMany();
     await prisma.affiliateRelationship.deleteMany();
     await prisma.offerApplication.deleteMany();
     await prisma.publicationRequirements.deleteMany();
-    await prisma.creatorKitAsset.deleteMany();
+    await prisma.creatorKitRevisionAsset.deleteMany();
     await prisma.creatorKitScenario.deleteMany();
     await prisma.creatorKitFact.deleteMany();
     await prisma.creatorKitClaim.deleteMany();
     await prisma.creatorKitRule.deleteMany();
+    await prisma.creatorKitBrandContent.deleteMany();
+    await prisma.creatorKitProductContent.deleteMany();
+    await prisma.creatorKit.updateMany({
+      data: { activeRevisionId: null, draftRevisionId: null },
+    });
+    await prisma.creatorKitRevision.deleteMany();
+    await prisma.creatorKitAsset.deleteMany();
     await prisma.creatorKit.deleteMany();
     await prisma.offer.deleteMany();
     await prisma.creatorProfile.deleteMany();

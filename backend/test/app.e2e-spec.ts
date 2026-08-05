@@ -94,14 +94,22 @@ describe('Stage 1 end-to-end', () => {
     await prisma.order.deleteMany();
     await prisma.orderImport.deleteMany();
     await prisma.click.deleteMany();
+    await prisma.creatorProductAccessGrant.deleteMany();
     await prisma.affiliateRelationship.deleteMany();
     await prisma.offerApplication.deleteMany();
     await prisma.publicationRequirements.deleteMany();
-    await prisma.creatorKitAsset.deleteMany();
+    await prisma.creatorKitRevisionAsset.deleteMany();
     await prisma.creatorKitScenario.deleteMany();
     await prisma.creatorKitFact.deleteMany();
     await prisma.creatorKitClaim.deleteMany();
     await prisma.creatorKitRule.deleteMany();
+    await prisma.creatorKitBrandContent.deleteMany();
+    await prisma.creatorKitProductContent.deleteMany();
+    await prisma.creatorKit.updateMany({
+      data: { activeRevisionId: null, draftRevisionId: null },
+    });
+    await prisma.creatorKitRevision.deleteMany();
+    await prisma.creatorKitAsset.deleteMany();
     await prisma.creatorKit.deleteMany();
     await prisma.offer.deleteMany();
     await prisma.creatorProfile.deleteMany();
@@ -408,6 +416,11 @@ describe('Stage 1 end-to-end', () => {
     expect(completed.body.status).toBe('READY');
 
     await owner.agent
+      .post(`/api/brand/offers/${created.body.id}/creator-kit/publish`)
+      .set(authHeader(owner.token))
+      .send({})
+      .expect(201);
+    await owner.agent
       .post(`/api/brand/offers/${created.body.id}/publish`)
       .set(authHeader(owner.token))
       .expect(201);
@@ -472,6 +485,11 @@ describe('Stage 1 end-to-end', () => {
         ],
       })
       .expect(200);
+    await owner.agent
+      .post(`/api/brand/offers/${created.body.id}/creator-kit/publish`)
+      .set(authHeader(owner.token))
+      .send({})
+      .expect(201);
     await owner.agent
       .post(`/api/brand/offers/${created.body.id}/publish`)
       .set(authHeader(owner.token))
@@ -773,6 +791,11 @@ describe('Stage 1 end-to-end', () => {
         ],
       })
       .expect(200);
+    await owner.agent
+      .post(`/api/brand/offers/${offer.body.id}/creator-kit/publish`)
+      .set(authHeader(owner.token))
+      .send({})
+      .expect(201);
     await owner.agent
       .post(`/api/brand/offers/${offer.body.id}/publish`)
       .set(authHeader(owner.token))

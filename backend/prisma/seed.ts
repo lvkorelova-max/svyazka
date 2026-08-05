@@ -6,6 +6,7 @@ import {
   CreatorKitAccessLevel,
   CreatorKitClaimType,
   CreatorKitFactType,
+  CreatorKitRevisionStatus,
   CreatorKitScenarioChannel,
   LedgerEntryType,
   OfferApplicationStatus,
@@ -14,6 +15,7 @@ import {
   OrderImportRowStatus,
   OrderImportStatus,
   OrderStatus,
+  Prisma,
   PrismaClient,
   PromotionWithoutProduct,
   UserRole,
@@ -125,27 +127,99 @@ async function main() {
     create: { offerId: offers[0].id },
   });
 
+  const revision = await prisma.creatorKitRevision.upsert({
+    where: {
+      creatorKitId_revisionNumber: {
+        creatorKitId: kit.id,
+        revisionNumber: 1,
+      },
+    },
+    update: {
+      status: CreatorKitRevisionStatus.PUBLISHED,
+      createdByUserId: brandUser.id,
+      publishedByUserId: brandUser.id,
+      publishedAt: new Date('2026-07-30T00:00:00.000Z'),
+    },
+    create: {
+      id: '90000000-0000-4000-8000-000000000001',
+      creatorKitId: kit.id,
+      revisionNumber: 1,
+      status: CreatorKitRevisionStatus.PUBLISHED,
+      createdByUserId: brandUser.id,
+      publishedByUserId: brandUser.id,
+      publishedAt: new Date('2026-07-30T00:00:00.000Z'),
+      changeSummary: 'Создан тестовый Creator Kit',
+      changeSet: {
+        schemaVersion: 1,
+        sections: [{ section: 'CREATOR_KIT', changeType: 'CREATED' }],
+      },
+    },
+  });
+
+  await prisma.creatorKit.update({
+    where: { id: kit.id },
+    data: { activeRevisionId: revision.id, draftRevisionId: null },
+  });
+
   await prisma.$transaction(async (tx) => {
-    await tx.creatorKitScenario.deleteMany({ where: { creatorKitId: kit.id } });
-    await tx.creatorKitFact.deleteMany({ where: { creatorKitId: kit.id } });
-    await tx.creatorKitClaim.deleteMany({ where: { creatorKitId: kit.id } });
-    await tx.creatorKitRule.deleteMany({ where: { creatorKitId: kit.id } });
+    await tx.creatorKitScenario.deleteMany({ where: { revisionId: revision.id } });
+    await tx.creatorKitFact.deleteMany({ where: { revisionId: revision.id } });
+    await tx.creatorKitClaim.deleteMany({ where: { revisionId: revision.id } });
+    await tx.creatorKitRule.deleteMany({ where: { revisionId: revision.id } });
+
+    await tx.creatorKitBrandContent.upsert({
+      where: { revisionId: revision.id },
+      update: {
+        description: 'Российский бренд понятного ежедневного ухода.',
+        history: 'Бренд создан вокруг прозрачных составов и простых ритуалов ухода.',
+        values: ['Прозрачность', 'Забота', 'Проверяемые формулировки'],
+        positioning: 'Современный ежедневный уход без завышенных обещаний.',
+      },
+      create: {
+        revisionId: revision.id,
+        description: 'Российский бренд понятного ежедневного ухода.',
+        history: 'Бренд создан вокруг прозрачных составов и простых ритуалов ухода.',
+        values: ['Прозрачность', 'Забота', 'Проверяемые формулировки'],
+        positioning: 'Современный ежедневный уход без завышенных обещаний.',
+      },
+    });
+
+    await tx.creatorKitProductContent.upsert({
+      where: { revisionId: revision.id },
+      update: {
+        description: offers[0].description,
+        benefits: ['Поддерживает увлажнение', 'Подходит для ежедневного ухода'],
+        usageInstructions: 'Наносить на очищенную кожу согласно инструкции бренда.',
+      },
+      create: {
+        revisionId: revision.id,
+        description: offers[0].description,
+        benefits: ['Поддерживает увлажнение', 'Подходит для ежедневного ухода'],
+        usageInstructions: 'Наносить на очищенную кожу согласно инструкции бренда.',
+      },
+    });
 
     await tx.creatorKitScenario.createMany({
       data: [
         {
-          creatorKitId: kit.id,
+          revisionId: revision.id,
           channel: CreatorKitScenarioChannel.REELS,
           title: 'Три проверяемых факта о сыворотке',
-          idea: 'Используйте официальные кадры и расскажите о составе без заявления о личном опыте.',
+          hook: 'Что важно знать об увлажняющей сыворотке?',
+          mainIdea: 'Используйте официальные кадры и расскажите о составе без заявления о личном опыте.',
+          structure: 'Хук, три факта, официальный кадр продукта, вывод.',
+          cta: 'Перейдите по ссылке и изучите карточку продукта.',
           accessLevel: CreatorKitAccessLevel.DIGITAL,
           sortOrder: 1,
         },
         {
-          creatorKitId: kit.id,
+          revisionId: revision.id,
           channel: CreatorKitScenarioChannel.SHORT_REVIEW,
           title: 'Личный обзор после получения образца',
-          idea: 'Покажите текстуру и опишите собственные впечатления только после получения продукта.',
+          hook: 'Показываю текстуру сыворотки после личного знакомства.',
+          mainIdea: 'Покажите текстуру и опишите собственные впечатления только после получения продукта.',
+          structure: 'Хук, нанесение, личные наблюдения, ограничения, вывод.',
+          cta: 'Используйте персональный промокод.',
           accessLevel: CreatorKitAccessLevel.PRODUCT,
           sortOrder: 2,
         },
@@ -166,7 +240,7 @@ async function main() {
     ] as const;
     await tx.creatorKitFact.createMany({
       data: facts.map(([type, value], index) => ({
-        creatorKitId: kit.id,
+        revisionId: revision.id,
         type,
         value,
         sortOrder: index + 1,
@@ -176,13 +250,13 @@ async function main() {
     await tx.creatorKitClaim.createMany({
       data: [
         {
-          creatorKitId: kit.id,
+          revisionId: revision.id,
           type: CreatorKitClaimType.ALLOWED,
           value: 'Бренд указывает в составе ниацинамид и гиалуроновую кислоту.',
           sortOrder: 1,
         },
         {
-          creatorKitId: kit.id,
+          revisionId: revision.id,
           type: CreatorKitClaimType.FORBIDDEN,
           value: 'Я протестировала продукт и точно рекомендую — до получения образца.',
           sortOrder: 2,
@@ -193,12 +267,12 @@ async function main() {
     await tx.creatorKitRule.createMany({
       data: [
         {
-          creatorKitId: kit.id,
+          revisionId: revision.id,
           value: 'Использовать только официальные материалы бренда.',
           sortOrder: 1,
         },
         {
-          creatorKitId: kit.id,
+          revisionId: revision.id,
           value: 'Не утверждать, что продукт был лично протестирован.',
           sortOrder: 2,
         },
@@ -206,7 +280,7 @@ async function main() {
     });
 
     await tx.publicationRequirements.upsert({
-      where: { creatorKitId: kit.id },
+      where: { revisionId: revision.id },
       update: {
         mandatoryMentions: ['Название продукта', 'Актуальная цена'],
         advertisingLabel: 'Маркировка рекламы обязательна для рекламной публикации.',
@@ -216,7 +290,7 @@ async function main() {
         allowedPlatforms: ['VK', 'Telegram', 'Threads', 'короткие видео'],
       },
       create: {
-        creatorKitId: kit.id,
+        revisionId: revision.id,
         mandatoryMentions: ['Название продукта', 'Актуальная цена'],
         advertisingLabel: 'Маркировка рекламы обязательна для рекламной публикации.',
         hashtags: ['#реклама', '#бережно'],
@@ -225,6 +299,53 @@ async function main() {
         allowedPlatforms: ['VK', 'Telegram', 'Threads', 'короткие видео'],
       },
     });
+  });
+
+  const revisionContent = await prisma.creatorKitRevision.findUniqueOrThrow({
+    where: { id: revision.id },
+    include: {
+      brandContent: true,
+      productContent: true,
+      scenarios: { orderBy: { sortOrder: 'asc' } },
+      facts: { orderBy: { sortOrder: 'asc' } },
+      claims: { orderBy: { sortOrder: 'asc' } },
+      rules: { orderBy: { sortOrder: 'asc' } },
+      publicationRequirements: true,
+    },
+  });
+  const strip = (value: Record<string, unknown> | null) => {
+    if (!value) return null;
+    const {
+      revisionId: _revisionId,
+      createdAt: _createdAt,
+      updatedAt: _updatedAt,
+      ...rest
+    } = value;
+    return rest;
+  };
+  const snapshot = {
+    schemaVersion: 1,
+    customSections: [],
+    brandContent: strip(revisionContent.brandContent),
+    productContent: strip(revisionContent.productContent),
+    assets: [],
+    scenarios: revisionContent.scenarios.map((item) => strip(item)),
+    facts: revisionContent.facts.map((item) => strip(item)),
+    claims: revisionContent.claims.map((item) => strip(item)),
+    rules: revisionContent.rules.map((item) => strip(item)),
+    publicationRequirements: strip(revisionContent.publicationRequirements),
+  };
+  await prisma.creatorKitRevision.update({
+    where: { id: revision.id },
+    data: {
+      snapshot: snapshot as Prisma.InputJsonValue,
+      completenessPercent: 85,
+      completenessDetails: {
+        percent: 85,
+        readyToPublish: false,
+        missingSections: ['Материалы'],
+      },
+    },
   });
 
   const application = await prisma.offerApplication.upsert({
