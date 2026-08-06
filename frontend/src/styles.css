@@ -976,6 +976,16 @@ p {
   font-weight: 700;
 }
 
+.form-hint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.form-hint.error {
+  color: var(--danger);
+}
+
 .form-actions {
   display: flex;
   justify-content: space-between;

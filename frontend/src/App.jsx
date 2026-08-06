@@ -4,6 +4,11 @@ import {
   COMMISSION_FILTERS,
   matchesCommissionFilter
 } from "./commissionFilter.mjs";
+import {
+  OFFER_CATEGORY_OTHER,
+  OFFER_CATEGORY_PRESETS,
+  getOfferCategorySelectValue
+} from "./offerCategories.mjs";
 import { buildDefaultPublicationRequirements } from "./publicationRequirements.mjs";
 
 const productImages = {
@@ -2324,8 +2329,21 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName }) {
     forbiddenClaims: "Я протестировала и рекомендую; гарантированно решает проблему",
     publicationRequirements: buildDefaultPublicationRequirements(brandName)
   });
+  const [categoryError, setCategoryError] = useState("");
 
   const update = (key, value) => setForm({ ...form, [key]: value });
+  const categorySelectValue = getOfferCategorySelectValue(form.category);
+  const updateCategory = (value) => {
+    setCategoryError("");
+    update("category", value);
+  };
+  const selectCategory = (value) => {
+    if (value === OFFER_CATEGORY_OTHER) {
+      updateCategory(categorySelectValue === OFFER_CATEGORY_OTHER ? form.category : "");
+      return;
+    }
+    updateCategory(value);
+  };
   const toggleFormat = (format) => {
     update(
       "allowedDigitalFormats",
@@ -2379,6 +2397,14 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName }) {
       completeness: { percent: 0, missingSections: ["О бренде", "Сценарии", "Материалы"] }
     }, previewBase)
   };
+  const submitOffer = (shouldPublish) => {
+    const category = form.category.trim();
+    if (!category) {
+      setCategoryError("Укажите свою категорию.");
+      return;
+    }
+    publish({ ...previewOffer, category }, shouldPublish, initialOffer?.id);
+  };
 
   return (
     <main className="create-page">
@@ -2396,7 +2422,29 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName }) {
               <p>Основная информация, которую увидит креатор.</p>
               <div className="form-grid">
                 <div className="form-group full"><label className="form-label">Название</label><input className="field" value={form.title} onChange={(e) => update("title", e.target.value)} /></div>
-                <div className="form-group"><label className="form-label">Категория</label><select className="select-field" value={form.category} onChange={(e) => update("category", e.target.value)}><option>Красота и уход</option><option>Одежда и обувь</option><option>Дом и интерьер</option><option>Аксессуары</option></select></div>
+                <div className="form-group">
+                  <label className="form-label">Категория</label>
+                  <select className="select-field" value={categorySelectValue} onChange={(event) => selectCategory(event.target.value)}>
+                    {OFFER_CATEGORY_PRESETS.map((category) => <option key={category}>{category}</option>)}
+                    <option value={OFFER_CATEGORY_OTHER}>{OFFER_CATEGORY_OTHER}</option>
+                  </select>
+                  {categorySelectValue === OFFER_CATEGORY_OTHER && (
+                    <>
+                      <input
+                        className="field"
+                        value={form.category}
+                        onChange={(event) => updateCategory(event.target.value)}
+                        placeholder="Например, экотовары или книги"
+                        maxLength={120}
+                        aria-invalid={Boolean(categoryError)}
+                        aria-describedby="offer-category-hint"
+                      />
+                      <span id="offer-category-hint" className={`form-hint ${categoryError ? "error" : ""}`}>
+                        {categoryError || "Уточнение сохранится как отдельная категория и поможет расширить список."}
+                      </span>
+                    </>
+                  )}
+                </div>
                 <div className="form-group"><label className="form-label">Цена, ₽</label><input className="field" type="number" value={form.price} onChange={(e) => update("price", Number(e.target.value))} /></div>
                 <div className="form-group full"><label className="form-label">Ссылка на товар</label><input className="field" type="url" value={form.productUrl} onChange={(e) => update("productUrl", e.target.value)} placeholder="https://brand.ru/products/product" /></div>
                 <div className="form-group full"><label className="form-label">Описание</label><textarea className="textarea" value={form.description} onChange={(e) => update("description", e.target.value)} /></div>
@@ -2477,8 +2525,8 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName }) {
               </div>
             </section>
             <div className="form-actions">
-              {(!initialOffer || initialOffer.apiStatus === "DRAFT") && <button className="button secondary" onClick={() => publish(previewOffer, false, initialOffer?.id)}>Сохранить черновик</button>}
-              <button className="button" onClick={() => publish(previewOffer, !initialOffer || initialOffer.apiStatus === "DRAFT", initialOffer?.id)}>
+              {(!initialOffer || initialOffer.apiStatus === "DRAFT") && <button className="button secondary" onClick={() => submitOffer(false)}>Сохранить черновик</button>}
+              <button className="button" onClick={() => submitOffer(!initialOffer || initialOffer.apiStatus === "DRAFT")}>
                 {initialOffer && initialOffer.apiStatus !== "DRAFT" ? "Сохранить изменения" : "Опубликовать оффер"}
               </button>
             </div>
