@@ -4,6 +4,7 @@ import {
   COMMISSION_FILTERS,
   matchesCommissionFilter
 } from "./commissionFilter.mjs";
+import { buildDefaultPublicationRequirements } from "./publicationRequirements.mjs";
 
 const productImages = {
   skincare: "https://images.unsplash.com/photo-1556228578-8c89e6adf883?auto=format&fit=crop&w=1200&q=85",
@@ -2321,7 +2322,7 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName }) {
     allowedDigitalFormats: initialOffer?.creatorKit?.allowedDigitalFormats || [...digitalFormats],
     allowedClaims: "Подходит для ежедневного ухода; бренд указывает в составе…",
     forbiddenClaims: "Я протестировала и рекомендую; гарантированно решает проблему",
-    publicationRequirements: "Указать название и цену, добавить маркировку рекламы, упомянуть @lunea."
+    publicationRequirements: buildDefaultPublicationRequirements(brandName)
   });
 
   const update = (key, value) => setForm({ ...form, [key]: value });

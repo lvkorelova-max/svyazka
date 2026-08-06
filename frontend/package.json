@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --test src/commissionFilter.test.mjs",
+    "test": "node --test src/*.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
