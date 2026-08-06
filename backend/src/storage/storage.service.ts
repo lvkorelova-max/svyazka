@@ -64,6 +64,20 @@ export class S3StorageService {
     );
   }
 
+  createViewUrl(objectKey: string, contentType: string) {
+    const expiresIn = Number(this.config.get<string>('S3_DOWNLOAD_URL_TTL_SECONDS') ?? 300);
+    return getSignedUrl(
+      this.publicClient,
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: objectKey,
+        ResponseContentType: contentType,
+        ResponseContentDisposition: 'inline',
+      }),
+      { expiresIn },
+    );
+  }
+
   head(objectKey: string) {
     return this.internalClient.send(
       new HeadObjectCommand({ Bucket: this.bucket, Key: objectKey }),

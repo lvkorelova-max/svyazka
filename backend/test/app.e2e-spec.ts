@@ -111,6 +111,8 @@ describe('Stage 1 end-to-end', () => {
     await prisma.creatorKitRevision.deleteMany();
     await prisma.creatorKitAsset.deleteMany();
     await prisma.creatorKit.deleteMany();
+    await prisma.offer.updateMany({ data: { imageId: null } });
+    await prisma.offerImage.deleteMany();
     await prisma.offer.deleteMany();
     await prisma.creatorProfile.deleteMany();
     await prisma.brandProfile.deleteMany();
@@ -351,6 +353,201 @@ describe('Stage 1 end-to-end', () => {
         where: { action: 'BRAND_VERIFIED', entityId: profile.id },
       }),
     ).toBe(1);
+  });
+
+  it('загружает локальное изображение оффера, сохраняет его и показывает креатору', async () => {
+    const owner = await loginAgent(brand.email, brand.password);
+    const created = await owner.agent
+      .post('/api/brand/offers')
+      .set(authHeader(owner.token))
+      .send({ ...offerPayload, title: 'Оффер с локальным изображением' })
+      .expect(201);
+
+    await owner.agent
+      .post(`/api/brand/offers/${created.body.id}/image/uploads`)
+      .set(authHeader(owner.token))
+      .send({
+        originalFileName: 'unsafe.svg',
+        mimeType: 'image/svg+xml',
+        byteSize: 100,
+      })
+      .expect(400);
+    await owner.agent
+      .post(`/api/brand/offers/${created.body.id}/image/uploads`)
+      .set(authHeader(owner.token))
+      .send({
+        originalFileName: 'too-large.png',
+        mimeType: 'image/png',
+        byteSize: 26_214_401,
+      })
+      .expect(400);
+
+    const otherBrandUser = await prisma.user.findUniqueOrThrow({
+      where: { email: otherBrand.email },
+    });
+    await prisma.brandProfile.update({
+      where: { userId: otherBrandUser.id },
+      data: { verificationStatus: 'VERIFIED' },
+    });
+    const stranger = await loginAgent(otherBrand.email, otherBrand.password);
+    await stranger.agent
+      .post(`/api/brand/offers/${created.body.id}/image/uploads`)
+      .set(authHeader(stranger.token))
+      .send({
+        originalFileName: 'foreign.png',
+        mimeType: 'image/png',
+        byteSize: 100,
+      })
+      .expect(403);
+
+    const file = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      'base64',
+    );
+    const initialized = await owner.agent
+      .post(`/api/brand/offers/${created.body.id}/image/uploads`)
+      .set(authHeader(owner.token))
+      .send({
+        originalFileName: 'product.png',
+        mimeType: 'image/png',
+        byteSize: file.length,
+      })
+      .expect(201);
+    expect(initialized.body.upload.storageObjectKey).toBeUndefined();
+    expect(initialized.body.requiredHeaders).toEqual({ 'Content-Type': 'image/png' });
+
+    const uploadResponse = await fetch(initialized.body.uploadUrl, {
+      method: 'PUT',
+      headers: initialized.body.requiredHeaders,
+      body: file,
+    });
+    if (!uploadResponse.ok) {
+      throw new Error(
+        `MinIO offer image upload failed (${uploadResponse.status}): ${await uploadResponse.text()}`,
+      );
+    }
+
+    const completed = await owner.agent
+      .post(
+        `/api/brand/offers/${created.body.id}/image/uploads/${initialized.body.upload.id}/complete`,
+      )
+      .set(authHeader(owner.token))
+      .expect(201);
+    expect(completed.body.imageUrl).toMatch(/^http:\/\/localhost:\d+\//);
+    expect(completed.body.image).toBeUndefined();
+
+    const imageResponse = await fetch(completed.body.imageUrl);
+    expect(imageResponse.ok).toBe(true);
+    expect(imageResponse.headers.get('content-type')).toContain('image/png');
+    expect(Buffer.from(await imageResponse.arrayBuffer())).toEqual(file);
+
+    const stored = await prisma.offer.findUniqueOrThrow({
+      where: { id: created.body.id },
+      include: { image: true },
+    });
+    expect(stored.image?.status).toBe('READY');
+    expect(stored.image?.storageObjectKey).toMatch(
+      new RegExp(`^brands/${stored.brandId}/offers/${stored.id}/image/`),
+    );
+    expect(stored.imageUrl).toBeNull();
+
+    const edited = await owner.agent
+      .patch(`/api/brand/offers/${created.body.id}`)
+      .set(authHeader(owner.token))
+      .send({ title: 'Оффер с сохранённым изображением' })
+      .expect(200);
+    expect(edited.body.imageUrl).toEqual(expect.any(String));
+    expect((await fetch(edited.body.imageUrl)).ok).toBe(true);
+
+    const failedReplacement = await owner.agent
+      .post(`/api/brand/offers/${created.body.id}/image/uploads`)
+      .set(authHeader(owner.token))
+      .send({
+        originalFileName: 'replacement.webp',
+        mimeType: 'image/webp',
+        byteSize: 20,
+      })
+      .expect(201);
+    await owner.agent
+      .post(
+        `/api/brand/offers/${created.body.id}/image/uploads/${failedReplacement.body.upload.id}/complete`,
+      )
+      .set(authHeader(owner.token))
+      .expect(400);
+    expect(
+      (await prisma.offer.findUniqueOrThrow({ where: { id: created.body.id } })).imageId,
+    ).toBe(stored.imageId);
+
+    await owner.agent
+      .post(
+        `/api/brand/offers/${created.body.id}/image/uploads/${initialized.body.upload.id}/complete`,
+      )
+      .set(authHeader(owner.token))
+      .expect(201);
+    expect(
+      await prisma.auditLog.count({
+        where: { action: 'OFFER_IMAGE_UPLOADED', entityId: created.body.id },
+      }),
+    ).toBe(1);
+
+    const replacementFile = Buffer.from('replacement-offer-image');
+    const replacement = await owner.agent
+      .post(`/api/brand/offers/${created.body.id}/image/uploads`)
+      .set(authHeader(owner.token))
+      .send({
+        originalFileName: 'replacement.png',
+        mimeType: 'image/png',
+        byteSize: replacementFile.length,
+      })
+      .expect(201);
+    const replacementUpload = await fetch(replacement.body.uploadUrl, {
+      method: 'PUT',
+      headers: replacement.body.requiredHeaders,
+      body: replacementFile,
+    });
+    expect(replacementUpload.ok).toBe(true);
+    const replaced = await owner.agent
+      .post(
+        `/api/brand/offers/${created.body.id}/image/uploads/${replacement.body.upload.id}/complete`,
+      )
+      .set(authHeader(owner.token))
+      .expect(201);
+    expect((await fetch(replaced.body.imageUrl)).ok).toBe(true);
+    expect(
+      (await prisma.offer.findUniqueOrThrow({ where: { id: created.body.id } })).imageId,
+    ).toBe(replacement.body.upload.id);
+    expect(
+      (await prisma.offerImage.findUniqueOrThrow({ where: { id: stored.imageId! } })).status,
+    ).toBe('DELETED');
+    expect(
+      await prisma.auditLog.count({
+        where: { action: 'OFFER_IMAGE_UPLOADED', entityId: created.body.id },
+      }),
+    ).toBe(2);
+
+    await owner.agent
+      .post(`/api/brand/offers/${created.body.id}/publish`)
+      .set(authHeader(owner.token))
+      .expect(201);
+    const creatorSession = await loginAgent(creator.email, creator.password);
+    const creatorOffer = await creatorSession.agent
+      .get(`/api/creator/offers/${created.body.id}`)
+      .set(authHeader(creatorSession.token))
+      .expect(200);
+    expect(creatorOffer.body.imageUrl).toEqual(expect.any(String));
+    expect((await fetch(creatorOffer.body.imageUrl)).ok).toBe(true);
+
+    await app.close();
+    app = await createApplication();
+    prisma = app.get(PrismaService);
+    const afterRestart = await loginAgent(brand.email, brand.password);
+    const offers = await afterRestart.agent
+      .get('/api/brand/offers')
+      .set(authHeader(afterRestart.token))
+      .expect(200);
+    const restored = offers.body.find((offer: { id: string }) => offer.id === created.body.id);
+    expect(restored.imageUrl).toEqual(expect.any(String));
+    expect((await fetch(restored.imageUrl)).ok).toBe(true);
   });
 
   it('загружает Digital-материал через presigned URL и подтверждает его через S3 HEAD', async () => {

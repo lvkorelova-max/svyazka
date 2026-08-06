@@ -134,6 +134,8 @@ describe('Stage 4 affiliate finance end-to-end', () => {
     await prisma.creatorKitRevision.deleteMany();
     await prisma.creatorKitAsset.deleteMany();
     await prisma.creatorKit.deleteMany();
+    await prisma.offer.updateMany({ data: { imageId: null } });
+    await prisma.offerImage.deleteMany();
     await prisma.offer.deleteMany();
     await prisma.creatorProfile.deleteMany();
     await prisma.brandProfile.deleteMany();

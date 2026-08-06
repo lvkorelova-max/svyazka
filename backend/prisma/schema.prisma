@@ -32,6 +32,14 @@ enum OfferStatus {
   ARCHIVED
 }
 
+enum OfferImageStatus {
+  UPLOADING
+  READY
+  SUPERSEDED
+  FAILED
+  DELETED
+}
+
 enum CreatorKitAccessLevel {
   DIGITAL
   PRODUCT
@@ -272,6 +280,7 @@ model CreatorProfile {
 model Offer {
   id                      String                  @id @default(uuid()) @db.Uuid
   brandId                 String                  @db.Uuid
+  imageId                 String?                 @unique @db.Uuid
   title                   String                  @db.VarChar(200)
   description             String
   productUrl              String?                 @db.VarChar(1000)
@@ -285,6 +294,8 @@ model Offer {
   productRequirementSales Int                     @default(0)
   allowedPromotionFormats String[]                @default([])
   brand                   BrandProfile            @relation(fields: [brandId], references: [id], onDelete: Restrict)
+  image                   OfferImage?             @relation("ActiveOfferImage", fields: [imageId], references: [id], onDelete: Restrict)
+  imageUploads            OfferImage[]            @relation("OfferImageUploads")
   creatorKit              CreatorKit?
   applications            OfferApplication[]
   affiliateRelationships  AffiliateRelationship[]
@@ -297,6 +308,25 @@ model Offer {
 
   @@index([brandId, status])
   @@index([status, createdAt])
+}
+
+model OfferImage {
+  id               String           @id @default(uuid()) @db.Uuid
+  offerId          String           @db.Uuid
+  status           OfferImageStatus @default(UPLOADING)
+  originalFileName String           @db.VarChar(255)
+  extension        String           @db.VarChar(16)
+  mimeType         String           @db.VarChar(120)
+  byteSize         BigInt
+  storageObjectKey String           @unique @db.VarChar(1000)
+  completedAt      DateTime?
+  deletedAt        DateTime?
+  offer            Offer            @relation("OfferImageUploads", fields: [offerId], references: [id], onDelete: Restrict)
+  activeFor        Offer?           @relation("ActiveOfferImage")
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@index([offerId, status, createdAt])
 }
 
 model CreatorKit {

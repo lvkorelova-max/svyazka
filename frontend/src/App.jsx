@@ -9,6 +9,10 @@ import {
   OFFER_CATEGORY_PRESETS,
   getOfferCategorySelectValue
 } from "./offerCategories.mjs";
+import {
+  getOfferPreviewImage,
+  validateOfferImageFile
+} from "./offerImage.mjs";
 import { buildDefaultPublicationRequirements } from "./publicationRequirements.mjs";
 
 const productImages = {
@@ -2313,7 +2317,7 @@ function BrandDashboard({ user, offers, applications, relationships, finance, or
   );
 }
 
-function CreateOfferPage({ publish, navigate, initialOffer, brandName }) {
+function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAllowed }) {
   const [form, setForm] = useState({
     title: initialOffer?.title || "Набор для ночного ухода Renewal",
     category: initialOffer?.category || "Красота и уход",
@@ -2330,6 +2334,20 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName }) {
     publicationRequirements: buildDefaultPublicationRequirements(brandName)
   });
   const [categoryError, setCategoryError] = useState("");
+  const [imageError, setImageError] = useState("");
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreviewUrl, setImagePreviewUrl] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!imageFile) {
+      setImagePreviewUrl("");
+      return undefined;
+    }
+    const objectUrl = URL.createObjectURL(imageFile);
+    setImagePreviewUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [imageFile]);
 
   const update = (key, value) => setForm({ ...form, [key]: value });
   const categorySelectValue = getOfferCategorySelectValue(form.category);
@@ -2356,7 +2374,11 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName }) {
     ...form,
     id: 99,
     brand: brandName || initialOffer?.brand || "Бренд",
-    image: productImages.cosmetics,
+    image: getOfferPreviewImage(
+      imagePreviewUrl,
+      initialOffer?.image,
+      initialOffer ? productImages.skincare : productImages.cosmetics
+    ),
     status: "review",
     applications: 0,
     sales: 0
@@ -2397,13 +2419,28 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName }) {
       completeness: { percent: 0, missingSections: ["О бренде", "Сценарии", "Материалы"] }
     }, previewBase)
   };
-  const submitOffer = (shouldPublish) => {
+  const submitOffer = async (shouldPublish) => {
     const category = form.category.trim();
     if (!category) {
       setCategoryError("Укажите свою категорию.");
       return;
     }
-    publish({ ...previewOffer, category }, shouldPublish, initialOffer?.id);
+    const nextImageError = validateOfferImageFile(imageFile);
+    if (nextImageError) {
+      setImageError(nextImageError);
+      return;
+    }
+    setImageError("");
+    setSaving(true);
+    try {
+      await publish(
+        { ...previewOffer, category, imageFile },
+        shouldPublish,
+        initialOffer?.id
+      );
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -2448,7 +2485,32 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName }) {
                 <div className="form-group"><label className="form-label">Цена, ₽</label><input className="field" type="number" value={form.price} onChange={(e) => update("price", Number(e.target.value))} /></div>
                 <div className="form-group full"><label className="form-label">Ссылка на товар</label><input className="field" type="url" value={form.productUrl} onChange={(e) => update("productUrl", e.target.value)} placeholder="https://brand.ru/products/product" /></div>
                 <div className="form-group full"><label className="form-label">Описание</label><textarea className="textarea" value={form.description} onChange={(e) => update("description", e.target.value)} /></div>
-                <div className="form-group full"><label className="form-label">Изображения</label><div className="upload-box">Демонстрационная область загрузки<br />Изображение уже добавлено в предпросмотр</div></div>
+                <div className="form-group full">
+                  <label className="form-label">Изображение товара</label>
+                  <input
+                    className="field"
+                    type="file"
+                    accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                    disabled={!uploadAllowed}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0] || null;
+                      setImageError("");
+                      setImageFile(file);
+                    }}
+                    aria-invalid={Boolean(imageError)}
+                    aria-describedby="offer-image-hint"
+                  />
+                  <span id="offer-image-hint" className={`form-hint ${imageError ? "error" : ""}`}>
+                    {imageError ||
+                      (!uploadAllowed
+                        ? "Загрузка доступна после подтверждения бренда администратором."
+                        : imageFile
+                          ? `${imageFile.name} — изображение справа уже обновлено.`
+                          : initialOffer?.imageUrl
+                            ? "Текущее изображение сохранено. Выберите новый файл, чтобы заменить его."
+                            : "Выберите JPG, PNG или WebP до 25 МБ — изображение справа обновится сразу.")}
+                  </span>
+                </div>
               </div>
             </section>
             <section className="form-section">
@@ -2525,9 +2587,9 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName }) {
               </div>
             </section>
             <div className="form-actions">
-              {(!initialOffer || initialOffer.apiStatus === "DRAFT") && <button className="button secondary" onClick={() => submitOffer(false)}>Сохранить черновик</button>}
-              <button className="button" onClick={() => submitOffer(!initialOffer || initialOffer.apiStatus === "DRAFT")}>
-                {initialOffer && initialOffer.apiStatus !== "DRAFT" ? "Сохранить изменения" : "Опубликовать оффер"}
+              {(!initialOffer || initialOffer.apiStatus === "DRAFT") && <button className="button secondary" disabled={saving} onClick={() => submitOffer(false)}>{saving ? "Сохраняем…" : "Сохранить черновик"}</button>}
+              <button className="button" disabled={saving} onClick={() => submitOffer(!initialOffer || initialOffer.apiStatus === "DRAFT")}>
+                {saving ? "Сохраняем…" : initialOffer && initialOffer.apiStatus !== "DRAFT" ? "Сохранить изменения" : "Опубликовать оффер"}
               </button>
             </div>
           </div>
@@ -2734,6 +2796,7 @@ function toUiOffer(offer, creatorKitResponse = null) {
     price: offer.productPriceKopecks / 100,
     commission: offer.creatorCommissionBps / 100,
     threshold: offer.productRequirementSales || 0,
+    imageUrl: offer.imageUrl || "",
     image: offer.imageUrl || productImages.skincare,
     status: offer.status === "PUBLISHED" ? "active" : offer.status.toLowerCase(),
     apiStatus: offer.status,
@@ -3276,6 +3339,25 @@ function App() {
           ...payload
         })
       });
+      if (offer.imageFile) {
+        const initialized = await api(`/brand/offers/${saved.id}/image/uploads`, {
+          method: "POST",
+          body: JSON.stringify({
+            originalFileName: offer.imageFile.name,
+            mimeType: offer.imageFile.type,
+            byteSize: offer.imageFile.size
+          })
+        });
+        const uploadResponse = await fetch(initialized.uploadUrl, {
+          method: "PUT",
+          headers: initialized.requiredHeaders,
+          body: offer.imageFile
+        });
+        if (!uploadResponse.ok) throw new Error("Хранилище не приняло изображение");
+        await api(`/brand/offers/${saved.id}/image/uploads/${initialized.upload.id}/complete`, {
+          method: "POST"
+        });
+      }
       await api(`/brand/offers/${saved.id}/creator-kit`, {
         method: "PUT",
         body: JSON.stringify(creatorKitPayload(offer.creatorKit))
@@ -3290,8 +3372,10 @@ function App() {
       await loadOffers("brand");
       notify(shouldPublish ? "Оффер сохранён и опубликован" : "Черновик сохранён");
       navigate("brand");
+      return true;
     } catch (error) {
       notify(error.message);
+      return false;
     }
   };
 
@@ -3371,7 +3455,7 @@ function App() {
       {page === "login" && <LoginPage login={login} verifyMfa={verifyMfa} navigate={navigate} />}
       {page === "creator" && role === "creator" && <CreatorDashboard user={user} applications={applications} relationships={relationships} offers={offers} finance={creatorFinance} cancelApplication={cancelApplication} copyValue={copyValue} navigate={navigate} />}
       {page === "brand" && role === "brand" && <BrandDashboard user={user} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onReload={() => loadOffers("brand")} transitionOffer={transitionOffer} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} />}
-      {page === "create" && role === "brand" && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} brandName={user?.profile?.brandName} />}
+      {page === "create" && role === "brand" && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} brandName={user?.profile?.brandName} uploadAllowed={user?.profile?.verificationStatus === "VERIFIED"} />}
       {page === "admin" && role === "admin" && <AdminDashboard user={user} offers={offers} brands={adminBrands} operationalReadiness={operationalReadiness} finance={adminFinance} createPayout={createPayout} approvePayout={approvePayout} markPayoutPaid={markPayoutPaid} cancelPayout={cancelPayout} verifyBrand={verifyBrand} changeAdminPassword={changeAdminPassword} beginAdminMfa={beginAdminMfa} confirmAdminMfa={confirmAdminMfa} />}
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
