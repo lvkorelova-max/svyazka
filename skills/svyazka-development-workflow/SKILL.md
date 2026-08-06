@@ -1,6 +1,6 @@
 ---
 name: svyazka-development-workflow
-description: Mandatory end-to-end development workflow for every Svyazka feature, bug fix, schema change, API change, frontend change, or release. Use to analyze the existing architecture, implement backward-compatible incremental changes, preserve security and audit behavior, run unit/integration/E2E/build/migration/backup gates, deploy only through immutable releases, verify production health and smoke behavior, clean temporary data, and produce a deployment report.
+description: Mandatory end-to-end development workflow for every Svyazka feature, bug fix, schema change, API change, frontend change, commit, or release. Use to analyze the existing architecture, implement backward-compatible incremental changes, preserve security and audit behavior, run unit/integration/E2E/build/migration/backup gates, perform defect-first review and secret scanning, create exact isolated commits, deploy only through immutable releases, verify production health and smoke behavior, clean temporary data, and produce a deployment report.
 ---
 
 # Svyazka Development Workflow
@@ -83,7 +83,20 @@ When Prisma, persisted data, or storage behavior changes:
 6. Never use production seed during deployment.
 7. Do not improvise destructive rollback. Use a corrective migration or the documented restore procedure.
 
-## 7. Gate Production
+## 7. Review And Commit Precisely
+
+After all relevant local and migration gates pass, complete the isolated commit procedure in [quality-gates.md](references/quality-gates.md):
+
+1. Review the complete intended change with a defect-first stance.
+2. Scan all intended tracked and untracked files for secrets without printing secret values.
+3. Define an explicit allowlist of paths for the logical commit.
+4. Stage only those paths. Never use broad staging such as `git add .` or `git add -A`.
+5. Verify the staged name list, diff, whitespace, tests, and absence of unrelated files.
+6. Commit only after all relevant gates pass.
+7. Verify the commit SHA, subject, exact file list, diff summary, and remaining worktree state.
+8. If the commit includes or omits an unexpected file, stop and correct it without discarding user work.
+
+## 8. Gate Production
 
 Production deployment is allowed only when explicitly approved and all relevant local checks pass.
 
@@ -98,7 +111,7 @@ Before deployment:
 
 For detailed deployment commands and backup evidence, use `$svyazka-safe-deploy`.
 
-## 8. Deploy Safely
+## 9. Deploy Safely
 
 1. Never edit the active production release or application files in place.
 2. Build from the exact verified commit.
@@ -110,7 +123,7 @@ For detailed deployment commands and backup evidence, use `$svyazka-safe-deploy`
 8. Recreate only affected services when safe.
 9. Never delete production volumes, backups, secrets, or release history as part of a normal deployment.
 
-## 9. Verify Production
+## 10. Verify Production
 
 1. Confirm the active production commit equals the intended commit.
 2. Verify live and ready health endpoints.
@@ -119,14 +132,14 @@ For detailed deployment commands and backup evidence, use `$svyazka-safe-deploy`
 5. Confirm backups remain healthy after deployment.
 6. If smoke verification fails, fix forward immediately or roll back to the recorded release.
 
-## 10. Clean Up
+## 11. Clean Up
 
 1. Remove all temporary users, sessions, offers, applications, files, orders, commissions, audit entries, and other test records created by smoke tests.
 2. Delete temporary objects from storage when applicable.
 3. Prove cleanup with exact zero-count queries or equivalent checks.
 4. Do not delete legitimate production data.
 
-## 11. Report
+## 12. Report
 
 Use the report template in [quality-gates.md](references/quality-gates.md).
 

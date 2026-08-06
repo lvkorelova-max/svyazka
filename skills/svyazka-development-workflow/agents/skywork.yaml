@@ -1,4 +1,4 @@
 interface:
   display_name: "Svyazka Development Workflow"
   short_description: "Mandatory feature delivery and deployment gates"
-  default_prompt: "Use $svyazka-development-workflow to implement this Svyazka feature through architecture analysis, incremental changes, tests, migrations, backup checks, immutable deployment, production smoke verification, cleanup, and reporting."
+  default_prompt: "Use $svyazka-development-workflow to implement this Svyazka feature through architecture analysis, incremental changes, tests, validated review, secret scanning, exact staging, an isolated commit, migrations, backup checks, immutable deployment, production smoke verification, cleanup, and reporting."
