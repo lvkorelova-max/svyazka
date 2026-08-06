@@ -12,7 +12,7 @@
     "stop": "docker compose down",
     "reset": "docker compose down -v",
     "build": "npm run build -w backend && npm run build -w frontend",
-    "test": "npm run test:e2e -w backend",
+    "test": "npm test -w frontend && npm run test:e2e -w backend",
     "test:e2e": "npm run test:e2e -w backend"
   }
 }

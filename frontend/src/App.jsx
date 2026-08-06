@@ -1,5 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, restoreSession, setAccessToken } from "./api/client";
+import {
+  COMMISSION_FILTERS,
+  matchesCommissionFilter
+} from "./commissionFilter.mjs";
 
 const productImages = {
   skincare: "https://images.unsplash.com/photo-1556228578-8c89e6adf883?auto=format&fit=crop&w=1200&q=85",
@@ -549,15 +553,12 @@ function HomePage({ offers, navigate, openOffer }) {
 function CatalogPage({ offers, openOffer, navigate }) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("Все категории");
-  const [commission, setCommission] = useState("Любая комиссия");
+  const [commission, setCommission] = useState(COMMISSION_FILTERS.ANY);
   const categories = ["Все категории", ...new Set(offers.map((offer) => offer.category))];
   const filtered = offers.filter((offer) => {
     const matchesQuery = `${offer.title} ${offer.brand}`.toLowerCase().includes(query.toLowerCase());
     const matchesCategory = category === "Все категории" || offer.category === category;
-    const matchesCommission =
-      commission === "Любая комиссия" ||
-      (commission === "От 15%" && offer.commission >= 15) ||
-      (commission === "До 14%" && offer.commission <= 14);
+    const matchesCommission = matchesCommissionFilter(offer.commission, commission);
     return matchesQuery && matchesCategory && matchesCommission && offer.status === "active";
   });
 
@@ -580,9 +581,7 @@ function CatalogPage({ offers, openOffer, navigate }) {
             {categories.map((item) => <option key={item}>{item}</option>)}
           </select>
           <select className="select-field" value={commission} onChange={(event) => setCommission(event.target.value)}>
-            <option>Любая комиссия</option>
-            <option>От 15%</option>
-            <option>До 14%</option>
+            {Object.values(COMMISSION_FILTERS).map((label) => <option key={label}>{label}</option>)}
           </select>
         </div>
         <div className="catalog-count">Найдено офферов: {filtered.length}</div>
