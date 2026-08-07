@@ -1368,6 +1368,11 @@ p {
   font-size: 14px;
 }
 
+.compact-upload-box {
+  min-height: 0;
+  margin-top: 12px;
+}
+
 .empty-state {
   padding: 48px 20px;
   color: var(--muted);

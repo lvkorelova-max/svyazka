@@ -1678,12 +1678,14 @@ function BrandCreatorKitManager({ offers, relationships, verificationStatus, ini
   );
 
   useEffect(() => {
-    if (initialFocus !== "assets" || uploadFocused || !editor || !selectedOffer) return undefined;
+    if (!["assets", "scenarios"].includes(initialFocus) || uploadFocused || !editor || !selectedOffer) return undefined;
     const timer = window.setTimeout(() => {
-      const uploadSection = document.getElementById("creator-kit-assets-upload");
-      if (!uploadSection) return;
-      uploadSection.scrollIntoView({ behavior: "smooth", block: "start" });
-      uploadSection.querySelector('input[type="file"]')?.focus({ preventScroll: true });
+      const targetId = initialFocus === "scenarios" ? "creator-kit-scenarios" : "creator-kit-assets-upload";
+      const targetSection = document.getElementById(targetId);
+      if (!targetSection) return;
+      targetSection.scrollIntoView({ behavior: "smooth", block: "start" });
+      const focusSelector = initialFocus === "scenarios" ? 'input:not([type]), input[type="text"]' : 'input[type="file"]';
+      targetSection.querySelector(focusSelector)?.focus({ preventScroll: true });
       setUploadFocused(true);
     }, 100);
     return () => window.clearTimeout(timer);
@@ -2050,8 +2052,14 @@ function BrandCreatorKitManager({ offers, relationships, verificationStatus, ini
           <div className="form-actions"><button className="button" type="button" disabled={saving} onClick={saveContent}>{saving ? "Сохраняем…" : "Сохранить черновик"}</button>{kit.revision?.status === "DRAFT" && <button className="button secondary" type="button" onClick={publishKit}>Опубликовать версию</button>}</div>
         </section>
 
-        <section className="panel creator-kit-upload">
+        <section id="creator-kit-scenarios" className={`panel creator-kit-upload ${initialFocus === "scenarios" ? "creator-kit-upload-target" : ""}`}>
           <div className="panel-header"><div><h2>Сценарии публикаций</h2><p>Каждый сценарий хранит структуру, CTA и собственный уровень доступа.</p></div></div>
+          {initialFocus === "scenarios" && (
+            <div className="creator-kit-upload-arrival" role="status">
+              <strong>Оффер сохранён.</strong>
+              <span>Заполните название и содержание сценария, затем нажмите «Добавить сценарий».</span>
+            </div>
+          )}
           <div className="panel-body form-grid">
             <div className="form-group"><label className="form-label">Канал</label><select className="select-field" value={scenarioForm.channel} onChange={(event) => setScenarioForm({ ...scenarioForm, channel: event.target.value })}>{Object.entries(scenarioChannelLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></div>
             <div className="form-group"><label className="form-label">Уровень доступа</label><select className="select-field" value={scenarioForm.accessLevel} onChange={(event) => setScenarioForm({ ...scenarioForm, accessLevel: event.target.value })}><option value="DIGITAL">Digital Access</option><option value="PRODUCT">Product Access</option></select></div>
@@ -2606,9 +2614,16 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAll
               </div>
 
               <div className="creator-kit-form-block">
-                <div><h3>Сценарии и банк фактов</h3><p>Сценарии показываются как идеи, которые креатор адаптирует под свой стиль.</p></div>
+                <div><h3>Сценарии создаются после сохранения оффера</h3><p>Форматы ниже — примеры каналов, а не кнопки. Сохраните оффер, чтобы открыть редактор сценариев в Creator Kit.</p></div>
                 <div className="format-chips">
                   {["Reels", "Stories", "Telegram", "Threads", "Пост", "Короткий обзор", "Подборка"].map((item) => <span key={item}>{item}</span>)}
+                </div>
+                <div className="upload-box compact-upload-box">
+                  <strong>Добавить сценарий</strong>
+                  <span>На следующем экране можно указать канал, название, хук, основную идею, структуру, CTA и уровень доступа.</span>
+                  <button className="button" type="button" disabled={saving} onClick={() => submitOffer(false, "creatorKitScenarios")}>
+                    {saving ? "Сохраняем…" : "Сохранить оффер и открыть редактор сценариев"}
+                  </button>
                 </div>
                 <div className="form-grid compact-form-grid">
                   <div className="form-group"><label className="form-label">Факты о продукте</label><textarea className="textarea" value={form.productFacts} onChange={(event) => update("productFacts", event.target.value)} placeholder={PRODUCT_FACTS_PLACEHOLDER} /></div>
@@ -3422,8 +3437,12 @@ function App() {
       notify(shouldPublish ? "Оффер сохранён и опубликован" : "Черновик сохранён");
       navigate(
         "brand",
-        options.destination === "creatorKit"
-          ? { brandTab: "creatorKit", creatorKitOfferId: saved.id, creatorKitFocus: "assets" }
+        ["creatorKit", "creatorKitScenarios"].includes(options.destination)
+          ? {
+              brandTab: "creatorKit",
+              creatorKitOfferId: saved.id,
+              creatorKitFocus: options.destination === "creatorKitScenarios" ? "scenarios" : "assets"
+            }
           : {}
       );
       return true;

@@ -21,7 +21,7 @@ test("кнопка сохраняет оффер и открывает реал�
   assert.match(source, /submitOffer\(false, "creatorKit"\)/);
   assert.match(source, /brandTab: "creatorKit"/);
   assert.match(source, /creatorKitOfferId: saved\.id/);
-  assert.match(source, /creatorKitFocus: "assets"/);
+  assert.match(source, /options\.destination === "creatorKitScenarios" \? "scenarios" : "assets"/);
   assert.match(source, /id="creator-kit-assets-upload"/);
   assert.match(source, /scrollIntoView\(\{ behavior: "smooth", block: "start" \}\)/);
 });
@@ -35,4 +35,13 @@ test("неподтверждённый бренд видит явную блок
   assert.match(source, /disabled=\{!uploadAllowed\}/);
   assert.match(source, /Загрузка файлов сейчас заблокирована: бренд ещё не подтверждён администратором/);
   assert.match(source, /Требуется подтверждение бренда/);
+});
+
+test("форматы сценариев явно помечены как примеры и ведут к редактору", () => {
+  assert.match(source, /Сценарии создаются после сохранения оффера/);
+  assert.match(source, /Форматы ниже — примеры каналов, а не кнопки/);
+  assert.match(source, /Сохранить оффер и открыть редактор сценариев/);
+  assert.match(source, /submitOffer\(false, "creatorKitScenarios"\)/);
+  assert.match(source, /creatorKitFocus: options\.destination === "creatorKitScenarios" \? "scenarios" : "assets"/);
+  assert.match(source, /id="creator-kit-scenarios"/);
 });
