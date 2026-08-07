@@ -1625,7 +1625,7 @@ function SalesTrackingLive({ notify, preview, onUpload, onConfirm }) {
   );
 }
 
-function BrandCreatorKitManager({ offers, relationships, verificationStatus, initialOfferId, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onReload }) {
+function BrandCreatorKitManager({ offers, relationships, verificationStatus, initialOfferId, initialFocus, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onReload }) {
   const brandOffers = offers;
   const [selectedOfferId, setSelectedOfferId] = useState(
     brandOffers.some((offer) => offer.id === initialOfferId)
@@ -1643,6 +1643,7 @@ function BrandCreatorKitManager({ offers, relationships, verificationStatus, ini
   const [restoreDetails, setRestoreDetails] = useState(null);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadFocused, setUploadFocused] = useState(false);
   const [editor, setEditor] = useState(null);
   const [scenarioForm, setScenarioForm] = useState({
     id: "",
@@ -1675,6 +1676,18 @@ function BrandCreatorKitManager({ offers, relationships, verificationStatus, ini
   const relevantCreators = Array.from(
     new Map(offerRelationships.map((item) => [item.creator.id, item.creator])).values()
   );
+
+  useEffect(() => {
+    if (initialFocus !== "assets" || uploadFocused || !editor || !selectedOffer) return undefined;
+    const timer = window.setTimeout(() => {
+      const uploadSection = document.getElementById("creator-kit-assets-upload");
+      if (!uploadSection) return;
+      uploadSection.scrollIntoView({ behavior: "smooth", block: "start" });
+      uploadSection.querySelector('input[type="file"]')?.focus({ preventScroll: true });
+      setUploadFocused(true);
+    }, 100);
+    return () => window.clearTimeout(timer);
+  }, [editor, initialFocus, selectedOffer, uploadFocused]);
 
   const updateUpload = (key, value) => setUploadForm((current) => ({ ...current, [key]: value }));
 
@@ -2074,18 +2087,24 @@ function BrandCreatorKitManager({ offers, relationships, verificationStatus, ini
           </div>
         </section>
 
-        <form className="creator-kit-upload panel" onSubmit={submitUpload}>
+        <form id="creator-kit-assets-upload" className={`creator-kit-upload panel ${initialFocus === "assets" ? "creator-kit-upload-target" : ""}`} onSubmit={submitUpload}>
           <div className="panel-header"><div><h2>Добавить материал</h2><p>Файл загружается напрямую в приватное хранилище и подтверждается сервером.</p></div></div>
+          {initialFocus === "assets" && (
+            <div className="creator-kit-upload-arrival" role="status">
+              <strong>Оффер сохранён.</strong>
+              <span>{uploadAllowed ? "Выберите файл ниже и нажмите «Загрузить материал»." : "Загрузка станет доступна после подтверждения бренда администратором."}</span>
+            </div>
+          )}
           {!uploadAllowed && (
             <div className="creator-warning compact-warning">
               <span className="warning-mark">!</span>
-              <strong>Загрузка файлов доступна после ручного подтверждения бренда администратором. Остальные настройки Creator Kit можно заполнять сейчас.</strong>
+              <strong>Загрузка файлов сейчас заблокирована: бренд ещё не подтверждён администратором. После статуса VERIFIED здесь станет доступна кнопка загрузки. Остальные настройки Creator Kit можно заполнять сейчас.</strong>
             </div>
           )}
           <div className="panel-body form-grid">
             <div className="form-group full">
               <label className="form-label">Файл</label>
-              <input className="field" type="file" accept=".jpg,.jpeg,.png,.webp,.mp4,.webm,.mov,.pdf" onChange={(event) => {
+              <input className="field" type="file" disabled={!uploadAllowed} accept=".jpg,.jpeg,.png,.webp,.mp4,.webm,.mov,.pdf" onChange={(event) => {
                 const file = event.target.files?.[0] || null;
                 setUploadForm((current) => ({ ...current, file, title: current.title || file?.name.replace(/\.[^.]+$/, "") || "" }));
               }} />
@@ -2107,7 +2126,7 @@ function BrandCreatorKitManager({ offers, relationships, verificationStatus, ini
               </div>
             </div>
           </div>
-          <div className="form-actions"><button className="button" type="submit" disabled={uploading || !uploadAllowed}>{uploading ? "Загрузка…" : "Загрузить материал"}</button></div>
+          <div className="form-actions"><button className="button" type="submit" disabled={uploading || !uploadAllowed}>{!uploadAllowed ? "Требуется подтверждение бренда" : uploading ? "Загрузка…" : "Загрузить материал"}</button></div>
         </form>
         </>
       )}
@@ -2142,7 +2161,7 @@ function BrandCreatorKitManager({ offers, relationships, verificationStatus, ini
   );
 }
 
-function BrandDashboard({ user, offers, applications, relationships, finance, orderImportPreview, initialTab = "offers", initialCreatorKitOfferId, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onReload, transitionOffer, onUploadOrders, onConfirmOrders }) {
+function BrandDashboard({ user, offers, applications, relationships, finance, orderImportPreview, initialTab = "offers", initialCreatorKitOfferId, initialCreatorKitFocus, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onReload, transitionOffer, onUploadOrders, onConfirmOrders }) {
   const [tab, setTab] = useState(initialTab);
   const brandName = user?.profile?.brandName || "Бренд";
 
@@ -2321,7 +2340,7 @@ function BrandDashboard({ user, offers, applications, relationships, finance, or
       )}
 
       {tab === "tracking" && <SalesTrackingLive notify={notify} preview={orderImportPreview} onUpload={onUploadOrders} onConfirm={onConfirmOrders} />}
-      {tab === "creatorKit" && <BrandCreatorKitManager offers={offers} relationships={relationships} verificationStatus={user?.profile?.verificationStatus} initialOfferId={initialCreatorKitOfferId} notify={notify} onToggleAsset={onToggleAsset} onDownloadAsset={onDownloadAsset} onUploadAsset={onUploadAsset} onReload={onReload} />}
+      {tab === "creatorKit" && <BrandCreatorKitManager offers={offers} relationships={relationships} verificationStatus={user?.profile?.verificationStatus} initialOfferId={initialCreatorKitOfferId} initialFocus={initialCreatorKitFocus} notify={notify} onToggleAsset={onToggleAsset} onDownloadAsset={onDownloadAsset} onUploadAsset={onUploadAsset} onReload={onReload} />}
     </DashboardLayout>
   );
 }
@@ -2569,18 +2588,19 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAll
 
               <div className="creator-kit-form-block">
                 <div>
-                  <h3>Какие материалы можно добавить после сохранения оффера</h3>
-                  <p>Карточки ниже показывают доступные типы материалов. Для каждого загруженного файла права использования настраиваются отдельно.</p>
+                  <h3>Материалы загружаются после сохранения оффера</h3>
+                  <p>Это перечень поддерживаемых типов, а не кнопки загрузки. Сохраните оффер — мы сразу откроем форму выбора файла в Creator Kit.</p>
                 </div>
                 <div className="material-type-grid">
                   {["Фото", "Вертикальные видео", "Горизонтальные видео", "PNG без фона", "Логотипы", "Lifestyle-контент", "Видео текстуры", "Видео использования", "Рекламные баннеры"].map((type, index) => (
-                    <span key={type}>{type}<small>Не добавлено</small></span>
+                    <span key={type}>{type}<small>Доступно в Creator Kit</small></span>
                   ))}
                 </div>
                 <div className="upload-box">
-                  <span>Реальная загрузка материалов выполняется в разделе Creator Kit кабинета бренда.</span>
-                  <button className="button secondary" type="button" disabled={saving} onClick={() => submitOffer(false, "creatorKit")}>
-                    {saving ? "Сохраняем…" : "Сохранить и перейти в Creator Kit"}
+                  <strong>Следующий шаг</strong>
+                  <span>Сохраните оффер. На следующем экране выберите файл и нажмите «Загрузить материал».</span>
+                  <button className="button" type="button" disabled={saving} onClick={() => submitOffer(false, "creatorKit")}>
+                    {saving ? "Сохраняем…" : "Сохранить оффер и открыть загрузку материалов"}
                   </button>
                 </div>
               </div>
@@ -2901,7 +2921,8 @@ function App() {
   const [editingOfferId, setEditingOfferId] = useState(null);
   const [brandDashboardTarget, setBrandDashboardTarget] = useState({
     tab: "offers",
-    creatorKitOfferId: null
+    creatorKitOfferId: null,
+    creatorKitFocus: null
   });
   const [registerRole, setRegisterRole] = useState("");
   const [applications, setApplications] = useState([]);
@@ -2972,7 +2993,8 @@ function App() {
     if (target === "brand") {
       setBrandDashboardTarget({
         tab: options.brandTab || "offers",
-        creatorKitOfferId: options.creatorKitOfferId || null
+        creatorKitOfferId: options.creatorKitOfferId || null,
+        creatorKitFocus: options.creatorKitFocus || null
       });
     }
     const safeTarget = canOpen(target, options.asRole || role) ? target : "login";
@@ -3401,7 +3423,7 @@ function App() {
       navigate(
         "brand",
         options.destination === "creatorKit"
-          ? { brandTab: "creatorKit", creatorKitOfferId: saved.id }
+          ? { brandTab: "creatorKit", creatorKitOfferId: saved.id, creatorKitFocus: "assets" }
           : {}
       );
       return true;
@@ -3486,7 +3508,7 @@ function App() {
       {page === "register" && <RegisterPage presetRole={registerRole} complete={completeRegistration} navigate={navigate} />}
       {page === "login" && <LoginPage login={login} verifyMfa={verifyMfa} navigate={navigate} />}
       {page === "creator" && role === "creator" && <CreatorDashboard user={user} applications={applications} relationships={relationships} offers={offers} finance={creatorFinance} cancelApplication={cancelApplication} copyValue={copyValue} navigate={navigate} />}
-      {page === "brand" && role === "brand" && <BrandDashboard user={user} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} initialTab={brandDashboardTarget.tab} initialCreatorKitOfferId={brandDashboardTarget.creatorKitOfferId} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onReload={() => loadOffers("brand")} transitionOffer={transitionOffer} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} />}
+      {page === "brand" && role === "brand" && <BrandDashboard user={user} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} initialTab={brandDashboardTarget.tab} initialCreatorKitOfferId={brandDashboardTarget.creatorKitOfferId} initialCreatorKitFocus={brandDashboardTarget.creatorKitFocus} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onReload={() => loadOffers("brand")} transitionOffer={transitionOffer} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} />}
       {page === "create" && role === "brand" && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} brandName={user?.profile?.brandName} uploadAllowed={user?.profile?.verificationStatus === "VERIFIED"} />}
       {page === "admin" && role === "admin" && <AdminDashboard user={user} offers={offers} brands={adminBrands} operationalReadiness={operationalReadiness} finance={adminFinance} createPayout={createPayout} approvePayout={approvePayout} markPayoutPaid={markPayoutPaid} cancelPayout={cancelPayout} verifyBrand={verifyBrand} changeAdminPassword={changeAdminPassword} beginAdminMfa={beginAdminMfa} confirmAdminMfa={confirmAdminMfa} />}
       {toast && <div className="toast" role="status">{toast}</div>}

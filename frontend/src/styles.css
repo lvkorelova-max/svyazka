@@ -1363,6 +1363,11 @@ p {
   text-align: center;
 }
 
+.upload-box strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
 .empty-state {
   padding: 48px 20px;
   color: var(--muted);
@@ -1992,6 +1997,24 @@ p {
 
 .creator-kit-upload .form-actions {
   padding: 0 20px 20px;
+}
+
+.creator-kit-upload-target {
+  scroll-margin-top: 84px;
+  border-color: #b9d2c4;
+}
+
+.creator-kit-upload-arrival {
+  display: flex;
+  margin: 0 20px;
+  padding: 12px 14px;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid #b9d2c4;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+  font-size: 12px;
 }
 
 .checkbox-grid.compact {
