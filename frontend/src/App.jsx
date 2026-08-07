@@ -13,6 +13,11 @@ import {
   getOfferPreviewImage,
   validateOfferImageFile
 } from "./offerImage.mjs";
+import {
+  PRODUCT_FACTS_PLACEHOLDER,
+  buildOfferProductFacts,
+  formatOfferProductFacts
+} from "./offerProductFacts.mjs";
 import { buildDefaultPublicationRequirements } from "./publicationRequirements.mjs";
 
 const productImages = {
@@ -2318,6 +2323,7 @@ function BrandDashboard({ user, offers, applications, relationships, finance, or
 }
 
 function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAllowed }) {
+  const initialProductFacts = initialOffer?.creatorKit?.factsRaw || [];
   const [form, setForm] = useState({
     title: initialOffer?.title || "Набор для ночного ухода Renewal",
     category: initialOffer?.category || "Красота и уход",
@@ -2329,6 +2335,7 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAll
     terms: "Нативная интеграция в контент об уходе и образе жизни.",
     promotionWithoutSample: initialOffer?.creatorKit?.promotionWithoutSample || "restricted",
     allowedDigitalFormats: initialOffer?.creatorKit?.allowedDigitalFormats || [...digitalFormats],
+    productFacts: formatOfferProductFacts(initialProductFacts),
     allowedClaims: "Подходит для ежедневного ухода; бренд указывает в составе…",
     forbiddenClaims: "Я протестировала и рекомендую; гарантированно решает проблему",
     publicationRequirements: buildDefaultPublicationRequirements(brandName)
@@ -2396,7 +2403,7 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAll
       },
       assets: [],
       scenarios: [],
-      facts: [],
+      facts: buildOfferProductFacts(form.productFacts, initialProductFacts),
       claims: [
         ...form.allowedClaims.split(";").map((value) => value.trim()).filter(Boolean).map((value, index) => ({ type: "ALLOWED", value, accessLevel: "DIGITAL", requiresAffiliateApproval: false, sortOrder: index })),
         ...form.forbiddenClaims.split(";").map((value) => value.trim()).filter(Boolean).map((value, index) => ({ type: "FORBIDDEN", value, accessLevel: "DIGITAL", requiresAffiliateApproval: false, sortOrder: index }))
@@ -2574,7 +2581,7 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAll
                   {["Reels", "Stories", "Telegram", "Threads", "Пост", "Короткий обзор", "Подборка"].map((item) => <span key={item}>{item}</span>)}
                 </div>
                 <div className="form-grid compact-form-grid">
-                  <div className="form-group"><label className="form-label">Факты о продукте</label><textarea className="textarea" value="Описание, преимущества, состав, применение, цена, объём, производство, аудитория и ограничения" readOnly /></div>
+                  <div className="form-group"><label className="form-label">Факты о продукте</label><textarea className="textarea" value={form.productFacts} onChange={(event) => update("productFacts", event.target.value)} placeholder={PRODUCT_FACTS_PLACEHOLDER} /></div>
                   <div className="form-group"><label className="form-label">Требования к публикации</label><textarea className="textarea" value={form.publicationRequirements} onChange={(e) => update("publicationRequirements", e.target.value)} /></div>
                   <div className="form-group"><label className="form-label">Разрешённые формулировки</label><textarea className="textarea" value={form.allowedClaims} onChange={(e) => update("allowedClaims", e.target.value)} /></div>
                   <div className="form-group"><label className="form-label">Запрещённые формулировки</label><textarea className="textarea" value={form.forbiddenClaims} onChange={(e) => update("forbiddenClaims", e.target.value)} /></div>
