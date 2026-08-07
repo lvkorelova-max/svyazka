@@ -1353,7 +1353,9 @@ p {
 .upload-box {
   display: grid;
   min-height: 120px;
+  gap: 12px;
   place-items: center;
+  padding: 20px;
   border: 1px dashed var(--line-strong);
   border-radius: 6px;
   color: var(--muted);

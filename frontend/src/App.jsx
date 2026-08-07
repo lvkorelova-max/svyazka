@@ -1625,9 +1625,13 @@ function SalesTrackingLive({ notify, preview, onUpload, onConfirm }) {
   );
 }
 
-function BrandCreatorKitManager({ offers, relationships, verificationStatus, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onReload }) {
+function BrandCreatorKitManager({ offers, relationships, verificationStatus, initialOfferId, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onReload }) {
   const brandOffers = offers;
-  const [selectedOfferId, setSelectedOfferId] = useState(brandOffers[0] ? brandOffers[0].id : null);
+  const [selectedOfferId, setSelectedOfferId] = useState(
+    brandOffers.some((offer) => offer.id === initialOfferId)
+      ? initialOfferId
+      : brandOffers[0]?.id || null
+  );
   const [preview, setPreview] = useState(false);
   const [previewSource, setPreviewSource] = useState("DRAFT");
   const [previewProduct, setPreviewProduct] = useState("NOT_GRANTED");
@@ -2138,8 +2142,8 @@ function BrandCreatorKitManager({ offers, relationships, verificationStatus, not
   );
 }
 
-function BrandDashboard({ user, offers, applications, relationships, finance, orderImportPreview, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onReload, transitionOffer, onUploadOrders, onConfirmOrders }) {
-  const [tab, setTab] = useState("offers");
+function BrandDashboard({ user, offers, applications, relationships, finance, orderImportPreview, initialTab = "offers", initialCreatorKitOfferId, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onReload, transitionOffer, onUploadOrders, onConfirmOrders }) {
+  const [tab, setTab] = useState(initialTab);
   const brandName = user?.profile?.brandName || "Бренд";
 
   return (
@@ -2317,7 +2321,7 @@ function BrandDashboard({ user, offers, applications, relationships, finance, or
       )}
 
       {tab === "tracking" && <SalesTrackingLive notify={notify} preview={orderImportPreview} onUpload={onUploadOrders} onConfirm={onConfirmOrders} />}
-      {tab === "creatorKit" && <BrandCreatorKitManager offers={offers} relationships={relationships} verificationStatus={user?.profile?.verificationStatus} notify={notify} onToggleAsset={onToggleAsset} onDownloadAsset={onDownloadAsset} onUploadAsset={onUploadAsset} onReload={onReload} />}
+      {tab === "creatorKit" && <BrandCreatorKitManager offers={offers} relationships={relationships} verificationStatus={user?.profile?.verificationStatus} initialOfferId={initialCreatorKitOfferId} notify={notify} onToggleAsset={onToggleAsset} onDownloadAsset={onDownloadAsset} onUploadAsset={onUploadAsset} onReload={onReload} />}
     </DashboardLayout>
   );
 }
@@ -2426,7 +2430,7 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAll
       completeness: { percent: 0, missingSections: ["О бренде", "Сценарии", "Материалы"] }
     }, previewBase)
   };
-  const submitOffer = async (shouldPublish) => {
+  const submitOffer = async (shouldPublish, destination = "offers") => {
     const category = form.category.trim();
     if (!category) {
       setCategoryError("Укажите свою категорию.");
@@ -2443,7 +2447,8 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAll
       await publish(
         { ...previewOffer, category, imageFile },
         shouldPublish,
-        initialOffer?.id
+        initialOffer?.id,
+        { destination }
       );
     } finally {
       setSaving(false);
@@ -2564,15 +2569,20 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAll
 
               <div className="creator-kit-form-block">
                 <div>
-                  <h3>Библиотека визуальных материалов</h3>
-                  <p>Для каждого файла права использования настраиваются отдельно.</p>
+                  <h3>Какие материалы можно добавить после сохранения оффера</h3>
+                  <p>Карточки ниже показывают доступные типы материалов. Для каждого загруженного файла права использования настраиваются отдельно.</p>
                 </div>
                 <div className="material-type-grid">
                   {["Фото", "Вертикальные видео", "Горизонтальные видео", "PNG без фона", "Логотипы", "Lifestyle-контент", "Видео текстуры", "Видео использования", "Рекламные баннеры"].map((type, index) => (
                     <span key={type}>{type}<small>Не добавлено</small></span>
                   ))}
                 </div>
-                <div className="upload-box">Реальная загрузка материалов доступна после сохранения оффера в разделе Creator Kit кабинета бренда.</div>
+                <div className="upload-box">
+                  <span>Реальная загрузка материалов выполняется в разделе Creator Kit кабинета бренда.</span>
+                  <button className="button secondary" type="button" disabled={saving} onClick={() => submitOffer(false, "creatorKit")}>
+                    {saving ? "Сохраняем…" : "Сохранить и перейти в Creator Kit"}
+                  </button>
+                </div>
               </div>
 
               <div className="creator-kit-form-block">
@@ -2889,6 +2899,10 @@ function App() {
   const [offers, setOffers] = useState([]);
   const [selectedOfferId, setSelectedOfferId] = useState(null);
   const [editingOfferId, setEditingOfferId] = useState(null);
+  const [brandDashboardTarget, setBrandDashboardTarget] = useState({
+    tab: "offers",
+    creatorKitOfferId: null
+  });
   const [registerRole, setRegisterRole] = useState("");
   const [applications, setApplications] = useState([]);
   const [relationships, setRelationships] = useState([]);
@@ -2955,6 +2969,12 @@ function App() {
     if (options.role) setRegisterRole(options.role);
     if (options.offerId) setSelectedOfferId(options.offerId);
     if (target === "create") setEditingOfferId(options.editOfferId || null);
+    if (target === "brand") {
+      setBrandDashboardTarget({
+        tab: options.brandTab || "offers",
+        creatorKitOfferId: options.creatorKitOfferId || null
+      });
+    }
     const safeTarget = canOpen(target, options.asRole || role) ? target : "login";
     setPage(safeTarget);
     window.history.pushState({ page: safeTarget }, "", `#${safeTarget}`);
@@ -3326,7 +3346,7 @@ function App() {
     }
   };
 
-  const saveOffer = async (offer, shouldPublish = false, existingOfferId = null) => {
+  const saveOffer = async (offer, shouldPublish = false, existingOfferId = null, options = {}) => {
     try {
       const promotionMap = { yes: "YES", no: "NO", restricted: "LIMITED" };
       const payload = {
@@ -3378,7 +3398,12 @@ function App() {
       }
       await loadOffers("brand");
       notify(shouldPublish ? "Оффер сохранён и опубликован" : "Черновик сохранён");
-      navigate("brand");
+      navigate(
+        "brand",
+        options.destination === "creatorKit"
+          ? { brandTab: "creatorKit", creatorKitOfferId: saved.id }
+          : {}
+      );
       return true;
     } catch (error) {
       notify(error.message);
@@ -3461,7 +3486,7 @@ function App() {
       {page === "register" && <RegisterPage presetRole={registerRole} complete={completeRegistration} navigate={navigate} />}
       {page === "login" && <LoginPage login={login} verifyMfa={verifyMfa} navigate={navigate} />}
       {page === "creator" && role === "creator" && <CreatorDashboard user={user} applications={applications} relationships={relationships} offers={offers} finance={creatorFinance} cancelApplication={cancelApplication} copyValue={copyValue} navigate={navigate} />}
-      {page === "brand" && role === "brand" && <BrandDashboard user={user} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onReload={() => loadOffers("brand")} transitionOffer={transitionOffer} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} />}
+      {page === "brand" && role === "brand" && <BrandDashboard user={user} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} initialTab={brandDashboardTarget.tab} initialCreatorKitOfferId={brandDashboardTarget.creatorKitOfferId} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onReload={() => loadOffers("brand")} transitionOffer={transitionOffer} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} />}
       {page === "create" && role === "brand" && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} brandName={user?.profile?.brandName} uploadAllowed={user?.profile?.verificationStatus === "VERIFIED"} />}
       {page === "admin" && role === "admin" && <AdminDashboard user={user} offers={offers} brands={adminBrands} operationalReadiness={operationalReadiness} finance={adminFinance} createPayout={createPayout} approvePayout={approvePayout} markPayoutPaid={markPayoutPaid} cancelPayout={cancelPayout} verifyBrand={verifyBrand} changeAdminPassword={changeAdminPassword} beginAdminMfa={beginAdminMfa} confirmAdminMfa={confirmAdminMfa} />}
       {toast && <div className="toast" role="status">{toast}</div>}
