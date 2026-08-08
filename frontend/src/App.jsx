@@ -19,6 +19,10 @@ import {
   formatOfferProductFacts
 } from "./offerProductFacts.mjs";
 import { buildDefaultPublicationRequirements } from "./publicationRequirements.mjs";
+import {
+  calculatePoolEconomics,
+  getApplicationUiState
+} from "./financeEconomics.mjs";
 
 const productImages = {
   skincare: "https://images.unsplash.com/photo-1556228578-8c89e6adf883?auto=format&fit=crop&w=1200&q=85",
@@ -438,7 +442,7 @@ function OfferCard({ offer, onOpen }) {
         </div>
         <div className="offer-terms">
           <div>
-            <span className="term-label">Комиссия</span>
+            <span className="term-label">Вы заработаете</span>
             <span className="term-value">{offer.commission}% · {money(reward)}</span>
           </div>
           <div>
@@ -924,7 +928,7 @@ function OfferPage({ offer, applicationStatus, role, apply, navigate, notify, on
             <h1>{offer.title}</h1>
             <div className="price-line">
               <span className="price">{money(offer.price)}</span>
-              <span className="commission">Комиссия {offer.commission}% · {money(reward)}</span>
+              <span className="commission">Вы заработаете {offer.commission}% · {money(reward)} с подтверждённой продажи</span>
             </div>
             <p className="description">{offer.description}</p>
             <div className="eligibility-box">
@@ -936,6 +940,8 @@ function OfferPage({ offer, applicationStatus, role, apply, navigate, notify, on
             </div>
             <div className="detail-list">
               <div className="detail-row"><span>Условия</span><strong>{offer.terms}</strong></div>
+              <div className="detail-row"><span>Пример дохода</span><strong>1 продажа: {money(reward)} · 10 продаж: {money(reward * 10)} · 30 продаж: {money(reward * 30)}</strong></div>
+              <div className="detail-row"><span>Когда начисляется</span><strong>После подтверждения оплаты и завершения периода возврата. Отмена или возврат уменьшает вознаграждение пропорционально.</strong></div>
               <div className="detail-row"><span>Creator Kit</span><strong>Digital Access · {offer.creatorKit.assets.filter((asset) => asset.active).length} материалов</strong></div>
               <div className="detail-row"><span>Начисление</span><strong>После подтверждения продажи</strong></div>
             </div>
@@ -1164,8 +1170,18 @@ const applicationStatusLabels = {
   PENDING: "На рассмотрении",
   APPROVED: "Одобрена",
   REJECTED: "Отклонена",
-  CANCELLED: "Отменена"
+  CANCELLED: "Отменена",
+  WITHDRAWN: "Отозвана"
 };
+
+function applicationUiState(application) {
+  return getApplicationUiState(application);
+}
+
+function formatRateBps(bps) {
+  const value = Number(bps || 0) / 100;
+  return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}%`;
+}
 
 const relationshipStatusLabels = {
   ACTIVE: "Активна",
@@ -1173,17 +1189,18 @@ const relationshipStatusLabels = {
   REVOKED: "Отозвана"
 };
 
-function CreatorDashboard({ user, applications, relationships, offers, finance, cancelApplication, copyValue, navigate }) {
+function CreatorDashboard({ user, applications, relationships, offers, finance, notifications, acceptTerms, withdrawApplication, copyValue, navigate }) {
   const [tab, setTab] = useState("offers");
   const activeRelationships = relationships.filter((item) => item.status === "ACTIVE");
   const displayName = user?.profile?.displayName || user?.name || "креатор";
+  const actionRequired = applications.filter((item) => applicationUiState(item) === "TERMS_CHANGED");
 
   return (
     <DashboardLayout
       roleLabel="Кабинет креатора"
       items={[
         { id: "offers", label: "Мои офферы" },
-        { id: "applications", label: "Заявки" },
+        { id: "applications", label: actionRequired.length ? `Заявки (${actionRequired.length})` : "Заявки" },
         { id: "links", label: "Партнёрские ссылки" },
         { id: "rewards", label: "Вознаграждения" }
       ]}
@@ -1199,8 +1216,26 @@ function CreatorDashboard({ user, applications, relationships, offers, finance, 
       </div>
       <div className="creator-warning compact-warning">
         <span className="warning-mark">i</span>
-        <strong>Заявки, партнёрские ссылки, клики, продажи и комиссии загружаются с сервера.</strong>
+        <strong>Заявки, партнёрские ссылки, клики, продажи и комиссии загружаются с сервера. Непрочитанных уведомлений: {notifications.counts?.unread || 0}.</strong>
       </div>
+      {!!actionRequired.length && (
+        <div className="panel">
+          <div className="panel-header"><h2>Требуется действие</h2><Status type="danger">{actionRequired.length}</Status></div>
+          <div className="panel-body">
+            {actionRequired.map((application) => (
+              <div className="tool-card" key={application.id}>
+                <span><strong>Условия оффера изменились</strong> · {application.offer.title}</span>
+                <span>Предыдущая ставка: {formatRateBps(application.latestAcceptedTerms?.creatorEffectiveGmvBps || application.termsObservation?.displayedCreatorEffectiveBps)}</span>
+                <span>Новая ставка: {formatRateBps(application.applicableCommercialTerms?.creatorEffectiveGmvBps)}</span>
+                <div className="row-actions">
+                  <button className="button" onClick={() => acceptTerms(application)}>Принять новые условия</button>
+                  <button className="button ghost" onClick={() => withdrawApplication(application.id)}>Отозвать заявку</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="stats-grid">
         <div className="stat-card"><span className="stat-label">Активные связи</span><span className="stat-value">{activeRelationships.length}</span><span className="stat-note">с рабочей ссылкой</span></div>
         <div className="stat-card"><span className="stat-label">На рассмотрении</span><span className="stat-value">{applications.filter((item) => item.status === "PENDING").length}</span><span className="stat-note">заявок</span></div>
@@ -1220,7 +1255,7 @@ function CreatorDashboard({ user, applications, relationships, offers, finance, 
                   <div className="creator-offer-image"><img src={offer.image} alt="" /></div>
                   <div>
                     <h3>{offer.title}</h3>
-                    <p>{offer.brand} · комиссия {offer.commission}%</p>
+                    <p>{offer.brand} · ваша ставка {formatRateBps(relationship.commercialAgreement?.creatorEffectiveGmvBps || offer.creatorEffectiveBps)}</p>
                   </div>
                   <div><Status type={relationship.status === "ACTIVE" ? "success" : relationship.status === "REVOKED" ? "danger" : "pending"}>{relationshipStatusLabels[relationship.status]}</Status></div>
                   <div className="creator-offer-actions">
@@ -1241,15 +1276,16 @@ function CreatorDashboard({ user, applications, relationships, offers, finance, 
             <table className="data-table">
               <thead><tr><th>Оффер</th><th>Бренд</th><th>Дата</th><th>Статус</th><th></th></tr></thead>
               <tbody>
-                {applications.map((application) => (
-                  <tr key={application.id}>
+                {applications.map((application) => {
+                  const uiState = applicationUiState(application);
+                  return <tr key={application.id}>
                     <td><span className="table-title">{application.offer.title}</span>{application.message && <span className="table-subtitle">{application.message}</span>}</td>
                     <td>{application.offer.brand.brandName}</td>
                     <td>{new Date(application.createdAt).toLocaleDateString("ru-RU")}</td>
-                    <td><Status type={application.status === "APPROVED" ? "success" : application.status === "REJECTED" ? "danger" : "pending"}>{applicationStatusLabels[application.status]}</Status></td>
-                    <td>{application.status === "PENDING" && <button className="button secondary small" onClick={() => cancelApplication(application.id)}>Отменить</button>}</td>
-                  </tr>
-                ))}
+                    <td><Status type={uiState === "APPROVED" ? "success" : ["REJECTED", "WITHDRAWN", "TERMS_CHANGED"].includes(uiState) ? "danger" : "pending"}>{uiState === "TERMS_CHANGED" ? "Условия изменились" : uiState === "CREATOR_REACCEPTED" ? "Новые условия приняты" : applicationStatusLabels[application.status]}</Status></td>
+                    <td>{application.status === "PENDING" && <button className="button secondary small" onClick={() => withdrawApplication(application.id)}>Отозвать</button>}</td>
+                  </tr>;
+                })}
               </tbody>
             </table>
           </div>
@@ -1303,6 +1339,14 @@ function CreatorDashboard({ user, applications, relationships, offers, finance, 
           </div>
           {!finance.orders?.items?.length && <div className="empty-state">Атрибутированных продаж пока нет.</div>}
           {Number(finance.summary?.debtKopecks || 0) > 0 && <div className="creator-warning compact-warning"><span className="warning-mark">!</span><strong>Задолженность после возвратов: {moneyKopecks(finance.summary.debtKopecks)}</strong></div>}
+          {!!finance.payouts?.items?.length && (
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead><tr><th>Дата</th><th>Сумма</th><th>Валюта</th><th>Статус</th></tr></thead>
+                <tbody>{finance.payouts.items.map((payout) => <tr key={payout.id}><td>{new Date(payout.createdAt).toLocaleDateString("ru-RU")}</td><td>{moneyKopecks(payout.amountKopecks)}</td><td>{payout.currency}</td><td><Status type={payout.status === "PAID" ? "success" : "pending"}>{payout.status}</Status></td></tr>)}</tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </DashboardLayout>
@@ -2181,6 +2225,8 @@ function BrandDashboard({ user, offers, applications, relationships, finance, or
         { id: "applications", label: "Заявки" },
         { id: "partners", label: "Партнёры" },
         { id: "sales", label: "Продажи" },
+        { id: "finance", label: "Финансы" },
+        { id: "statements", label: "Statements" },
         { id: "creatorKit", label: "Creator Kit" },
         { id: "tracking", label: "Отслеживание продаж" }
       ]}
@@ -2231,7 +2277,7 @@ function BrandDashboard({ user, offers, applications, relationships, finance, or
                     <td><span className="table-title">{offer.title}</span><span className="table-subtitle">{money(offer.price)}</span></td>
                     <td><Status type={offer.status === "active" ? "success" : "pending"}>{offer.statusLabel}</Status></td>
                     <td><strong>{offer.creatorKit.completeness}%</strong><span className="table-subtitle"> заполнено</span></td>
-                    <td>{offer.commission}%</td><td>{applications.filter((item) => item.offerId === offer.id).length}</td><td>—</td>
+                    <td><strong>{offer.totalCommission}% всего</strong><span className="table-subtitle">креатору {offer.commission}%</span></td><td>{applications.filter((item) => item.offerId === offer.id).length}</td><td>—</td>
                     <td>
                       <div className="row-actions">
                         <button className="button secondary small" onClick={() => navigate("offer", { offerId: offer.id })}>Открыть</button>
@@ -2257,22 +2303,24 @@ function BrandDashboard({ user, offers, applications, relationships, finance, or
             <table className="data-table">
               <thead><tr><th>Креатор</th><th>Оффер</th><th>Сообщение</th><th>Статус</th><th></th></tr></thead>
               <tbody>
-                {applications.map((application) => (
-                  <tr key={application.id}>
+                {applications.map((application) => {
+                  const uiState = applicationUiState(application);
+                  const approvalBlocked = uiState === "TERMS_CHANGED";
+                  return <tr key={application.id}>
                     <td><span className="table-title">{application.creator.displayName}</span><span className="table-subtitle">{application.creator.description || "Описание профиля не заполнено"}</span></td>
                     <td>{application.offer.title}</td>
-                    <td>{application.message || "Без сообщения"}</td>
-                    <td><Status type={application.status === "APPROVED" ? "success" : application.status === "REJECTED" ? "danger" : "pending"}>{applicationStatusLabels[application.status]}</Status></td>
+                    <td>{application.message || "Без сообщения"}{approvalBlocked && <span className="table-subtitle">Старая ставка: {formatRateBps(application.latestAcceptedTerms?.creatorEffectiveGmvBps || application.termsObservation?.displayedCreatorEffectiveBps)} · текущая: {formatRateBps(application.applicableCommercialTerms?.creatorEffectiveGmvBps)}</span>}</td>
+                    <td><Status type={application.status === "APPROVED" ? "success" : application.status === "REJECTED" || approvalBlocked ? "danger" : "pending"}>{approvalBlocked ? "Ожидается согласие креатора" : uiState === "CREATOR_REACCEPTED" ? "Новые условия приняты" : applicationStatusLabels[application.status]}</Status></td>
                     <td>
                       {application.status === "PENDING" && (
                         <div className="row-actions">
                           <button className="button secondary small" onClick={() => updateApplication(application.id, "reject")}>Отклонить</button>
-                          <button className="button small" onClick={() => updateApplication(application.id, "approve")}>Одобрить</button>
+                          <button className="button small" disabled={approvalBlocked} title={approvalBlocked ? "Креатор должен принять текущие коммерческие условия" : ""} onClick={() => updateApplication(application.id, "approve")}>Одобрить</button>
                         </div>
                       )}
                     </td>
-                  </tr>
-                ))}
+                  </tr>;
+                })}
               </tbody>
             </table>
           </div>
@@ -2347,6 +2395,35 @@ function BrandDashboard({ user, offers, applications, relationships, finance, or
         </div>
       )}
 
+      {tab === "finance" && (
+        <div className="panel">
+          <div className="panel-header"><h2>Финансовый обзор</h2><Status type="success">Серверный расчёт</Status></div>
+          <div className="stats-grid panel-body">
+            <div className="stat-card"><span className="stat-label">Атрибутированный GMV</span><span className="stat-value">{moneyKopecks(finance.overview?.attributedGmvMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Подтверждённый GMV</span><span className="stat-value">{moneyKopecks(finance.overview?.confirmedGmvMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Креаторам</span><span className="stat-value">{moneyKopecks(finance.overview?.creatorCommissionsAccruedMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Связке</span><span className="stat-value">{moneyKopecks(finance.overview?.platformFeesAccruedMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">К оплате</span><span className="stat-value">{moneyKopecks(finance.overview?.totalPayableMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Оплачено</span><span className="stat-value">{moneyKopecks(finance.overview?.paidMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Не оплачено</span><span className="stat-value">{moneyKopecks(finance.overview?.unpaidMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Просрочено</span><span className="stat-value">{moneyKopecks(finance.overview?.overdueMinor)}</span></div>
+          </div>
+        </div>
+      )}
+
+      {tab === "statements" && (
+        <div className="panel">
+          <div className="panel-header"><h2>Settlement statements</h2><Status type="success">Неизменяемые после выпуска</Status></div>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Период</th><th>Креаторам</th><th>Связке</th><th>К оплате</th><th>Оплачено</th><th>Статус</th></tr></thead>
+              <tbody>{(finance.statements || []).map((statement) => <tr key={statement.id}><td>{new Date(statement.periodStart).toLocaleDateString("ru-RU")} — {new Date(statement.periodEnd).toLocaleDateString("ru-RU")}</td><td>{moneyKopecks(statement.creatorObligationsMinor)}</td><td>{moneyKopecks(statement.platformFeeMinor)}</td><td>{moneyKopecks(statement.totalDueMinor)}</td><td>{moneyKopecks(statement.paidMinor)}</td><td><Status type={statement.status === "PAID" ? "success" : statement.status === "OVERDUE" ? "danger" : "pending"}>{statement.status}</Status></td></tr>)}</tbody>
+            </table>
+          </div>
+          {!finance.statements?.length && <div className="empty-state">Выпущенных statements пока нет.</div>}
+        </div>
+      )}
+
       {tab === "tracking" && <SalesTrackingLive notify={notify} preview={orderImportPreview} onUpload={onUploadOrders} onConfirm={onConfirmOrders} />}
       {tab === "creatorKit" && <BrandCreatorKitManager offers={offers} relationships={relationships} verificationStatus={user?.profile?.verificationStatus} initialOfferId={initialCreatorKitOfferId} initialFocus={initialCreatorKitFocus} notify={notify} onToggleAsset={onToggleAsset} onDownloadAsset={onDownloadAsset} onUploadAsset={onUploadAsset} onReload={onReload} />}
     </DashboardLayout>
@@ -2361,7 +2438,7 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAll
     description: initialOffer?.description || "Ночной уход для восстановления и увлажнения кожи.",
     productUrl: initialOffer?.productUrl || "https://example.test/products/renewal",
     price: initialOffer?.price ?? 7200,
-    commission: initialOffer?.commission ?? 17,
+    commission: initialOffer?.totalCommission ?? initialOffer?.commission ?? 15,
     threshold: initialOffer?.threshold ?? 5,
     terms: "Нативная интеграция в контент об уходе и образе жизни.",
     promotionWithoutSample: initialOffer?.creatorKit?.promotionWithoutSample || "restricted",
@@ -2408,8 +2485,16 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAll
         : [...form.allowedDigitalFormats, format]
     );
   };
+  const previewEconomics = calculatePoolEconomics(
+    Math.round(form.commission * 100),
+    Math.round(form.price * 100)
+  );
+  const creatorPreviewRate = previewEconomics.creatorEffectiveBps / 100;
+  const platformPreviewRate = previewEconomics.platformEffectiveBps / 100;
   const previewBase = {
     ...form,
+    commission: creatorPreviewRate,
+    totalCommission: form.commission,
     id: 99,
     brand: brandName || initialOffer?.brand || "Бренд",
     image: getOfferPreviewImage(
@@ -2554,9 +2639,11 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAll
             </section>
             <section className="form-section">
               <h2>Партнёрские условия</h2>
-              <p>Комиссия начисляется после подтверждения продажи.</p>
+              <p>Укажите общий commission pool. Распределение 65/35 рассчитывает сервер.</p>
               <div className="form-grid">
-                <div className="form-group"><label className="form-label">Комиссия, %</label><input className="field" type="number" value={form.commission} onChange={(e) => update("commission", Number(e.target.value))} /></div>
+                <div className="form-group"><label className="form-label">Общая комиссия Brand, %</label><input className="field" type="number" min="0" max="100" step="0.01" value={form.commission} onChange={(e) => update("commission", Number(e.target.value))} /></div>
+                <div className="form-group"><label className="form-label">Креатор получает</label><div className="field" aria-live="polite">{creatorPreviewRate}% от GMV</div></div>
+                <div className="form-group"><label className="form-label">Service fee Связки</label><div className="field" aria-live="polite">{platformPreviewRate}% от GMV</div></div>
                 <div className="form-group"><label className="form-label">Продаж до запроса товара</label><input className="field" type="number" value={form.threshold} onChange={(e) => update("threshold", Number(e.target.value))} /></div>
                 <div className="form-group full"><label className="form-label">Условия продвижения</label><textarea className="textarea" value={form.terms} onChange={(e) => update("terms", e.target.value)} /></div>
               </div>
@@ -2650,8 +2737,9 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAll
             <OfferCard offer={previewOffer} onOpen={() => {}} />
             <div className="panel" style={{ marginTop: 14 }}>
               <div className="panel-body">
-                <span className="term-label">Комиссия с одной продажи</span>
+                <span className="term-label">Общий расход Brand с одной продажи</span>
                 <strong style={{ fontSize: 22 }}>{money(Math.round(form.price * form.commission / 100))}</strong>
+                <span className="stat-note">Креатор: {money(Math.round(form.price * creatorPreviewRate / 100))} · Связка: {money(Math.round(form.price * platformPreviewRate / 100))}</span>
               </div>
             </div>
             <div className="panel" style={{ marginTop: 14 }}>
@@ -2668,11 +2756,25 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAll
   );
 }
 
-function AdminDashboard({ user, offers, brands, operationalReadiness, finance, createPayout, approvePayout, markPayoutPaid, cancelPayout, verifyBrand, changeAdminPassword, beginAdminMfa, confirmAdminMfa }) {
+function AdminDashboard({ user, offers, brands, operationalReadiness, finance, createPayout, approvePayout, markPayoutPaid, cancelPayout, issueStatement, recordBrandPayment, resolveDispute, runReconciliation, verifyBrand, changeAdminPassword, beginAdminMfa, confirmAdminMfa }) {
   const [tab, setTab] = useState("offers");
   const [securityForm, setSecurityForm] = useState({ currentPassword: "", newPassword: "", code: "" });
   const [mfaEnrollment, setMfaEnrollment] = useState(null);
   const [recoveryCodes, setRecoveryCodes] = useState([]);
+  const [statementForm, setStatementForm] = useState(() => {
+    const now = new Date();
+    const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+    const due = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 10));
+    return {
+      brandId: "",
+      periodStart: start.toISOString().slice(0, 10),
+      periodEnd: end.toISOString().slice(0, 10),
+      dueAt: due.toISOString().slice(0, 10),
+      currency: "RUB"
+    };
+  });
+  const [disputeResolutions, setDisputeResolutions] = useState({});
 
   const updateSecurity = (key, value) => setSecurityForm((current) => ({ ...current, [key]: value }));
 
@@ -2715,6 +2817,9 @@ function AdminDashboard({ user, offers, brands, operationalReadiness, finance, c
         { id: "brands", label: "Бренды" },
         { id: "creators", label: "Креаторы" },
         { id: "applications", label: "Заявки" },
+        { id: "finance", label: "Финансы" },
+        { id: "statements", label: "Statements" },
+        { id: "disputes", label: "Disputes" },
         { id: "payouts", label: "Выплаты" },
         { id: "ledger", label: "Ledger" }
       ]}
@@ -2739,8 +2844,8 @@ function AdminDashboard({ user, offers, brands, operationalReadiness, finance, c
         </div>
       )}
       <div className="stats-grid">
-        <div className="stat-card"><span className="stat-label">Бренды</span><span className="stat-value">6</span><span className="stat-note">в демонстрационных данных</span></div>
-        <div className="stat-card"><span className="stat-label">Креаторы</span><span className="stat-value">148</span><span className="stat-note">тестовые профили</span></div>
+        <div className="stat-card"><span className="stat-label">Бренды</span><span className="stat-value">{finance.overview?.brandCount || 0}</span><span className="stat-note">в финансовом контуре</span></div>
+        <div className="stat-card"><span className="stat-label">Креаторы</span><span className="stat-value">{finance.overview?.creatorCount || 0}</span><span className="stat-note">в финансовом контуре</span></div>
         <div className="stat-card"><span className="stat-label">Офферы</span><span className="stat-value">{offers.length}</span><span className="stat-note">{offers.filter((item) => item.status === "review").length} на проверке</span></div>
         <div className="stat-card"><span className="stat-label">Активные заявки</span><span className="stat-value">37</span><span className="stat-note">на рассмотрении</span></div>
       </div>
@@ -2792,6 +2897,43 @@ function AdminDashboard({ user, offers, brands, operationalReadiness, finance, c
           <div className="table-wrap"><table className="data-table"><thead><tr><th>Креатор</th><th>Бренд</th><th>Оффер</th><th>Статус</th></tr></thead><tbody><tr><td>Анна Лебедева</td><td>LUNEA</td><td>{offers[0].title}</td><td><Status type="success">Одобрена</Status></td></tr><tr><td>Мария Фролова</td><td>SEVER</td><td>{offers[2].title}</td><td><Status type="pending">На рассмотрении</Status></td></tr><tr><td>Елена Петрова</td><td>FORMA</td><td>{offers[1].title}</td><td><Status type="pending">На рассмотрении</Status></td></tr></tbody></table></div>
         </div>
       )}
+      {tab === "finance" && (
+        <div className="panel">
+          <div className="panel-header"><h2>Финансы платформы</h2><button className="button small" onClick={runReconciliation}>Запустить reconciliation</button></div>
+          <div className="stats-grid panel-body">
+            <div className="stat-card"><span className="stat-label">Creator-attributed GMV</span><span className="stat-value">{moneyKopecks(finance.overview?.attributedGmvMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Комиссии креаторов</span><span className="stat-value">{moneyKopecks(finance.overview?.creatorCommissionsMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Доход Связки</span><span className="stat-value">{moneyKopecks(finance.overview?.platformRevenueMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Brand obligations</span><span className="stat-value">{moneyKopecks(finance.overview?.brandObligationsMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Не оплачено</span><span className="stat-value">{moneyKopecks(finance.overview?.unpaidObligationsMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Выплачено креаторам</span><span className="stat-value">{moneyKopecks(finance.overview?.paidPayoutsMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Открытые disputes</span><span className="stat-value">{finance.overview?.openDisputes || 0}</span></div>
+          </div>
+        </div>
+      )}
+      {tab === "statements" && (
+        <div className="panel">
+          <div className="panel-header"><h2>Brand statements</h2><Status type="success">Immutable after issue</Status></div>
+          <div className="panel-body form-grid">
+            <div className="form-group"><label className="form-label">Бренд</label><select className="field" value={statementForm.brandId} onChange={(event) => setStatementForm((current) => ({ ...current, brandId: event.target.value }))}><option value="">Выберите бренд</option>{brands.map((brand) => <option key={brand.id} value={brand.id}>{brand.brandName}</option>)}</select></div>
+            <div className="form-group"><label className="form-label">Валюта</label><input className="field" value={statementForm.currency} maxLength={3} onChange={(event) => setStatementForm((current) => ({ ...current, currency: event.target.value.toUpperCase() }))} /></div>
+            <div className="form-group"><label className="form-label">Начало периода</label><input className="field" type="date" value={statementForm.periodStart} onChange={(event) => setStatementForm((current) => ({ ...current, periodStart: event.target.value }))} /></div>
+            <div className="form-group"><label className="form-label">Конец периода</label><input className="field" type="date" value={statementForm.periodEnd} onChange={(event) => setStatementForm((current) => ({ ...current, periodEnd: event.target.value }))} /></div>
+            <div className="form-group"><label className="form-label">Срок оплаты</label><input className="field" type="date" value={statementForm.dueAt} onChange={(event) => setStatementForm((current) => ({ ...current, dueAt: event.target.value }))} /></div>
+            <div className="form-actions"><button className="button" disabled={!statementForm.brandId} onClick={() => issueStatement(statementForm)}>Выпустить statement</button></div>
+          </div>
+          <div className="table-wrap"><table className="data-table"><thead><tr><th>Бренд</th><th>Период</th><th>Креаторам</th><th>Связке</th><th>К оплате</th><th>Оплачено</th><th>Статус</th><th></th></tr></thead><tbody>{(finance.statements || []).map((statement) => <tr key={statement.id}><td>{statement.brand?.brandName}</td><td>{new Date(statement.periodStart).toLocaleDateString("ru-RU")} — {new Date(statement.periodEnd).toLocaleDateString("ru-RU")}</td><td>{moneyKopecks(statement.creatorObligationsMinor)}</td><td>{moneyKopecks(statement.platformFeeMinor)}</td><td>{moneyKopecks(statement.totalDueMinor)}</td><td>{moneyKopecks(statement.paidMinor)}</td><td><Status type={statement.status === "PAID" ? "success" : statement.status === "OVERDUE" ? "danger" : "pending"}>{statement.status}</Status></td><td>{statement.status !== "PAID" && BigInt(statement.totalDueMinor || 0) > BigInt(statement.paidMinor || 0) && <button className="button small" onClick={() => recordBrandPayment(statement)}>Зафиксировать оплату остатка</button>}</td></tr>)}</tbody></table></div>
+          {!finance.statements?.length && <div className="empty-state">Statements ещё не выпущены.</div>}
+          {!!finance.payments?.length && <div className="table-wrap"><table className="data-table"><thead><tr><th>Дата платежа</th><th>Бренд</th><th>Сумма</th><th>Референс</th><th>Статус</th></tr></thead><tbody>{finance.payments.map((payment) => <tr key={payment.id}><td>{new Date(payment.paidAt).toLocaleDateString("ru-RU")}</td><td>{payment.brand?.brandName}</td><td>{moneyKopecks(payment.amountMinor)}</td><td>{payment.reference || "—"}</td><td><Status type={payment.status === "CANCELLED" ? "danger" : "success"}>{payment.status}</Status></td></tr>)}</tbody></table></div>}
+        </div>
+      )}
+      {tab === "disputes" && (
+        <div className="panel">
+          <div className="panel-header"><h2>Financial disputes</h2><Status type="pending">{finance.disputes?.filter((item) => item.status === "OPEN").length || 0} открыто</Status></div>
+          <div className="table-wrap"><table className="data-table"><thead><tr><th>Бренд</th><th>Заказ</th><th>Причина</th><th>Дата</th><th>Статус</th><th>Решение</th></tr></thead><tbody>{(finance.disputes || []).map((dispute) => <tr key={dispute.id}><td>{dispute.brand?.brandName}</td><td>{dispute.order?.externalOrderId}</td><td>{dispute.reason}</td><td>{new Date(dispute.openedAt).toLocaleDateString("ru-RU")}</td><td><Status type={dispute.status === "OPEN" ? "danger" : "success"}>{dispute.status}</Status></td><td>{dispute.status === "OPEN" ? <div className="row-actions"><input className="field" value={disputeResolutions[dispute.id] || ""} placeholder="Итог проверки" onChange={(event) => setDisputeResolutions((current) => ({ ...current, [dispute.id]: event.target.value }))} /><button className="button small" disabled={(disputeResolutions[dispute.id] || "").trim().length < 5} onClick={() => resolveDispute(dispute.id, disputeResolutions[dispute.id])}>Закрыть спор</button></div> : dispute.resolution || "—"}</td></tr>)}</tbody></table></div>
+          {!finance.disputes?.length && <div className="empty-state">Disputes отсутствуют.</div>}
+        </div>
+      )}
       {tab === "payouts" && (
         <div className="panel">
           <div className="panel-header"><h2>Ручные выплаты</h2><Status type="success">Подключено</Status></div>
@@ -2823,8 +2965,8 @@ function AdminDashboard({ user, offers, brands, operationalReadiness, finance, c
       )}
       {tab === "ledger" && (
         <div className="panel">
-          <div className="panel-header"><h2>Журнал ledger entries</h2><Status type="success">Неизменяемая история</Status></div>
-          <div className="table-wrap"><table className="data-table"><thead><tr><th>Дата</th><th>Креатор</th><th>Заказ</th><th>Тип</th><th>Сумма</th></tr></thead><tbody>{(finance.ledger?.items || []).map((entry) => <tr key={entry.id}><td>{new Date(entry.createdAt).toLocaleString("ru-RU")}</td><td>{entry.creator.displayName}</td><td>{entry.order.externalOrderId}</td><td>{entry.type}</td><td>{moneyKopecks(entry.amountKopecks)}</td></tr>)}</tbody></table></div>
+          <div className="panel-header"><h2>Balanced ledger transactions</h2><Status type="success">Append-only</Status></div>
+          <div className="table-wrap"><table className="data-table"><thead><tr><th>Дата</th><th>Событие</th><th>Источник</th><th>Заказ / Payout / Statement</th><th>Debit</th><th>Credit</th><th>Валюта</th></tr></thead><tbody>{(finance.ledger?.items || []).map((entry) => { const debit = (entry.postings || []).filter((posting) => posting.direction === "DEBIT").reduce((sum, posting) => sum + BigInt(posting.amountMinor), 0n); const credit = (entry.postings || []).filter((posting) => posting.direction === "CREDIT").reduce((sum, posting) => sum + BigInt(posting.amountMinor), 0n); return <tr key={entry.id}><td>{new Date(entry.createdAt).toLocaleString("ru-RU")}</td><td><strong>{entry.type}</strong><span className="table-subtitle">{entry.eventKey}</span></td><td>{entry.source}</td><td>{entry.order?.externalOrderId || entry.payout?.id || entry.statement?.id || "—"}</td><td>{moneyKopecks(debit)}</td><td>{moneyKopecks(credit)}</td><td>{entry.currency}</td></tr>; })}</tbody></table></div>
         </div>
       )}
     </DashboardLayout>
@@ -2840,13 +2982,23 @@ const STATUS_LABELS = {
 };
 
 function toUiOffer(offer, creatorKitResponse = null) {
+  const creatorEffectiveBps = offer.creatorEffectiveBps ?? offer.creatorCommissionBps;
+  const totalCommissionPoolBps = offer.totalCommissionPoolBps ?? creatorEffectiveBps;
   const base = {
     id: offer.id,
     brand: offer.brand?.brandName || "Бренд",
     title: offer.title,
     category: offer.category || "Товары",
     price: offer.productPriceKopecks / 100,
-    commission: offer.creatorCommissionBps / 100,
+    commission: creatorEffectiveBps / 100,
+    creatorEffectiveBps,
+    totalCommission: totalCommissionPoolBps / 100,
+    totalCommissionPoolBps,
+    platformEffectiveBps: offer.platformEffectiveBps ?? null,
+    offerVersion: offer.offerVersion ?? null,
+    commercialTermsVersion: offer.commercialTermsVersion ?? null,
+    calculationPolicy: offer.calculationPolicy || "LEGACY_DIRECT_RATES_V1",
+    currency: offer.currency || "RUB",
     threshold: offer.productRequirementSales || 0,
     imageUrl: offer.imageUrl || "",
     image: offer.imageUrl || productImages.skincare,
@@ -2942,9 +3094,10 @@ function App() {
   const [registerRole, setRegisterRole] = useState("");
   const [applications, setApplications] = useState([]);
   const [relationships, setRelationships] = useState([]);
-  const [creatorFinance, setCreatorFinance] = useState({ clicks: { items: [] }, orders: { items: [] }, commissions: { items: [] }, summary: {} });
-  const [brandFinance, setBrandFinance] = useState({ orders: { items: [] }, commissions: { items: [] }, analytics: {}, creatorAnalytics: { items: [] } });
-  const [adminFinance, setAdminFinance] = useState({ commissions: { items: [] }, payouts: { items: [] }, ledger: { items: [] } });
+  const [creatorFinance, setCreatorFinance] = useState({ clicks: { items: [] }, orders: { items: [] }, commissions: { items: [] }, payouts: { items: [] }, summary: {} });
+  const [creatorNotifications, setCreatorNotifications] = useState({ items: [], counts: { unread: 0, actionRequired: 0 } });
+  const [brandFinance, setBrandFinance] = useState({ orders: { items: [] }, commissions: { items: [] }, analytics: {}, creatorAnalytics: { items: [] }, overview: {}, statements: [] });
+  const [adminFinance, setAdminFinance] = useState({ commissions: { items: [] }, payouts: { items: [] }, ledger: { items: [] }, overview: {}, statements: [], payments: [], disputes: [] });
   const [adminBrands, setAdminBrands] = useState([]);
   const [operationalReadiness, setOperationalReadiness] = useState(null);
   const [orderImportPreview, setOrderImportPreview] = useState(null);
@@ -2972,30 +3125,40 @@ function App() {
 
   const loadFinance = async (currentRole) => {
     if (currentRole === "brand") {
-      const [ordersData, commissionsData, analyticsData, creatorAnalyticsData] = await Promise.all([
+      const [ordersData, commissionsData, analyticsData, creatorAnalyticsData, overviewData, statementsData] = await Promise.all([
         api("/brand/orders?pageSize=100"),
         api("/brand/commissions?pageSize=100"),
         api("/brand/analytics"),
-        api("/brand/analytics/creators?pageSize=100")
+        api("/brand/analytics/creators?pageSize=100"),
+        api("/brand/finance/overview"),
+        api("/brand/statements")
       ]);
-      setBrandFinance({ orders: ordersData, commissions: commissionsData, analytics: analyticsData, creatorAnalytics: creatorAnalyticsData });
+      setBrandFinance({ orders: ordersData, commissions: commissionsData, analytics: analyticsData, creatorAnalytics: creatorAnalyticsData, overview: overviewData, statements: statementsData });
     } else if (currentRole === "creator") {
-      const [clicksData, ordersData, commissionsData, summaryData] = await Promise.all([
+      const [clicksData, ordersData, commissionsData, summaryData, payoutsData, notificationsData, notificationCounts] = await Promise.all([
         api("/creator/clicks?pageSize=100"),
         api("/creator/orders?pageSize=100"),
         api("/creator/commissions?pageSize=100"),
-        api("/creator/earnings-summary")
+        api("/creator/earnings-summary"),
+        api("/creator/payouts?pageSize=100"),
+        api("/creator/notifications"),
+        api("/creator/notifications/unread-count")
       ]);
-      setCreatorFinance({ clicks: clicksData, orders: ordersData, commissions: commissionsData, summary: summaryData });
+      setCreatorFinance({ clicks: clicksData, orders: ordersData, commissions: commissionsData, payouts: payoutsData, summary: summaryData });
+      setCreatorNotifications({ items: notificationsData, counts: notificationCounts });
     } else if (currentRole === "admin") {
-      const [commissionsData, payoutsData, ledgerData, brandsData, readinessData] = await Promise.all([
+      const [commissionsData, payoutsData, ledgerData, brandsData, readinessData, overviewData, statementsData, paymentsData, disputesData] = await Promise.all([
         api("/admin/commissions?pageSize=100"),
         api("/admin/payouts?pageSize=100"),
-        api("/admin/ledger-entries?pageSize=100"),
+        api("/admin/ledger-transactions?pageSize=100"),
         api("/admin/brands"),
-        api("/admin/operations/readiness")
+        api("/admin/operations/readiness"),
+        api("/admin/finance/overview"),
+        api("/admin/statements"),
+        api("/admin/brand-payments"),
+        api("/admin/disputes")
       ]);
-      setAdminFinance({ commissions: commissionsData, payouts: payoutsData, ledger: ledgerData });
+      setAdminFinance({ commissions: commissionsData, payouts: payoutsData, ledger: ledgerData, overview: overviewData, statements: statementsData, payments: paymentsData, disputes: disputesData });
       setAdminBrands(brandsData);
       setOperationalReadiness(readinessData);
     }
@@ -3073,7 +3236,7 @@ function App() {
       try {
         await loadFinance("admin");
       } catch {
-        setAdminFinance({ commissions: { items: [] }, payouts: { items: [] }, ledger: { items: [] } });
+        setAdminFinance({ commissions: { items: [] }, payouts: { items: [] }, ledger: { items: [] }, overview: {}, statements: [], payments: [], disputes: [] });
         setAdminBrands([]);
         setOperationalReadiness(null);
       }
@@ -3206,9 +3369,10 @@ function App() {
     setOffers([]);
     setApplications([]);
     setRelationships([]);
-    setCreatorFinance({ clicks: { items: [] }, orders: { items: [] }, commissions: { items: [] }, summary: {} });
-    setBrandFinance({ orders: { items: [] }, commissions: { items: [] }, analytics: {}, creatorAnalytics: { items: [] } });
-    setAdminFinance({ commissions: { items: [] }, payouts: { items: [] }, ledger: { items: [] } });
+    setCreatorFinance({ clicks: { items: [] }, orders: { items: [] }, commissions: { items: [] }, payouts: { items: [] }, summary: {} });
+    setCreatorNotifications({ items: [], counts: { unread: 0, actionRequired: 0 } });
+    setBrandFinance({ orders: { items: [] }, commissions: { items: [] }, analytics: {}, creatorAnalytics: { items: [] }, overview: {}, statements: [] });
+    setAdminFinance({ commissions: { items: [] }, payouts: { items: [] }, ledger: { items: [] }, overview: {}, statements: [], payments: [], disputes: [] });
     setOrderImportPreview(null);
     navigate("home");
   };
@@ -3217,9 +3381,13 @@ function App() {
 
   const apply = async (offerId, message) => {
     try {
+      const offer = offers.find((item) => item.id === offerId);
       await api(`/creator/offers/${offerId}/applications`, {
         method: "POST",
-        body: JSON.stringify({ ...(message.trim() ? { message: message.trim() } : {}) })
+        body: JSON.stringify({
+          ...(message.trim() ? { message: message.trim() } : {}),
+          ...(offer?.commercialTermsVersion ? { expectedCommercialTermsVersion: offer.commercialTermsVersion } : {})
+        })
       });
       await loadOffers("creator");
       notify("Заявка отправлена бренду");
@@ -3227,6 +3395,33 @@ function App() {
     } catch (error) {
       notify(error.message);
       return false;
+    }
+  };
+
+  const acceptApplicationTerms = async (application) => {
+    try {
+      const version = application.applicableCommercialTerms?.version;
+      await api(`/creator/applications/${application.id}/accept-terms`, {
+        method: "POST",
+        body: JSON.stringify({
+          expectedCommercialTermsVersion: version,
+          expectedApplicationVersion: application.version
+        })
+      });
+      await loadOffers("creator");
+      notify("Новые коммерческие условия приняты");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const withdrawApplication = async (applicationId) => {
+    try {
+      await api(`/creator/applications/${applicationId}/withdraw`, { method: "POST" });
+      await loadOffers("creator");
+      notify("Заявка отозвана");
+    } catch (error) {
+      notify(error.message);
     }
   };
 
@@ -3242,7 +3437,18 @@ function App() {
 
   const updateApplication = async (applicationId, action) => {
     try {
-      await api(`/brand/applications/${applicationId}/${action}`, { method: "POST" });
+      const application = applications.find((item) => item.id === applicationId);
+      await api(`/brand/applications/${applicationId}/${action}`, {
+        method: "POST",
+        ...(action === "approve"
+          ? {
+              body: JSON.stringify({
+                expectedAcceptedTermsVersion: application?.applicableCommercialTerms?.version,
+                expectedApplicationVersion: application?.version
+              })
+            }
+          : {})
+      });
       await loadOffers("brand");
       notify(action === "approve" ? "Заявка одобрена, партнёрская связь создана" : "Заявка отклонена");
     } catch (error) {
@@ -3332,6 +3538,72 @@ function App() {
     }
   };
 
+  const runReconciliation = async () => {
+    try {
+      const result = await api("/admin/reconciliation/run", { method: "POST" });
+      await loadFinance("admin");
+      notify(result.status === "PASSED" ? "Reconciliation пройден" : `Найдены расхождения: ${result.mismatchCount}`);
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const issueStatement = async (form) => {
+    try {
+      await api("/admin/statements", {
+        method: "POST",
+        body: JSON.stringify({
+          brandId: form.brandId,
+          periodStart: `${form.periodStart}T00:00:00.000Z`,
+          periodEnd: `${form.periodEnd}T00:00:00.000Z`,
+          dueAt: `${form.dueAt}T00:00:00.000Z`,
+          currency: form.currency
+        })
+      });
+      await loadFinance("admin");
+      notify("Statement выпущен");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const recordBrandPayment = async (statement) => {
+    try {
+      const remaining = (
+        BigInt(statement.totalDueMinor || 0) -
+        BigInt(statement.paidMinor || 0)
+      ).toString();
+      await api("/admin/brand-payments", {
+        method: "POST",
+        body: JSON.stringify({
+          brandId: statement.brandId,
+          currency: statement.currency,
+          amountMinor: remaining,
+          paidAt: new Date().toISOString(),
+          reference: `statement-${statement.id}`,
+          allocations: [{ statementId: statement.id, amountMinor: remaining }]
+        })
+      });
+      await loadFinance("admin");
+      notify("Оплата Brand зафиксирована");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const resolveDispute = async (disputeId, resolution) => {
+    try {
+      await api(`/admin/disputes/${disputeId}/resolve`, {
+        method: "POST",
+        body: JSON.stringify({ resolution })
+      });
+      await loadFinance("admin");
+      notify("Dispute закрыт с сохранением AuditLog");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
   const verifyBrand = async (brandId) => {
     try {
       await api(`/admin/brands/${brandId}/verify`, { method: "POST" });
@@ -3391,7 +3663,7 @@ function App() {
         description: offer.description,
         productPriceKopecks: Math.round(offer.price * 100),
         ...(offer.productUrl ? { productUrl: offer.productUrl } : {}),
-        creatorCommissionBps: Math.round(offer.commission * 100),
+        totalCommissionPoolBps: Math.round((offer.totalCommission ?? offer.commission) * 100),
         promotionWithoutProduct: promotionMap[offer.creatorKit.promotionWithoutSample],
         category: offer.category,
         productRequirementSales: offer.threshold,
@@ -3526,10 +3798,10 @@ function App() {
       {page === "offer" && selectedOffer && <OfferPage offer={selectedOffer} applicationStatus={(applications.find((item) => item.offerId === selectedOffer.id)?.status || "NONE").toLowerCase()} role={role} apply={apply} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} />}
       {page === "register" && <RegisterPage presetRole={registerRole} complete={completeRegistration} navigate={navigate} />}
       {page === "login" && <LoginPage login={login} verifyMfa={verifyMfa} navigate={navigate} />}
-      {page === "creator" && role === "creator" && <CreatorDashboard user={user} applications={applications} relationships={relationships} offers={offers} finance={creatorFinance} cancelApplication={cancelApplication} copyValue={copyValue} navigate={navigate} />}
+      {page === "creator" && role === "creator" && <CreatorDashboard user={user} applications={applications} relationships={relationships} offers={offers} finance={creatorFinance} notifications={creatorNotifications} acceptTerms={acceptApplicationTerms} withdrawApplication={withdrawApplication} copyValue={copyValue} navigate={navigate} />}
       {page === "brand" && role === "brand" && <BrandDashboard user={user} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} initialTab={brandDashboardTarget.tab} initialCreatorKitOfferId={brandDashboardTarget.creatorKitOfferId} initialCreatorKitFocus={brandDashboardTarget.creatorKitFocus} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onReload={() => loadOffers("brand")} transitionOffer={transitionOffer} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} />}
       {page === "create" && role === "brand" && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} brandName={user?.profile?.brandName} uploadAllowed={user?.profile?.verificationStatus === "VERIFIED"} />}
-      {page === "admin" && role === "admin" && <AdminDashboard user={user} offers={offers} brands={adminBrands} operationalReadiness={operationalReadiness} finance={adminFinance} createPayout={createPayout} approvePayout={approvePayout} markPayoutPaid={markPayoutPaid} cancelPayout={cancelPayout} verifyBrand={verifyBrand} changeAdminPassword={changeAdminPassword} beginAdminMfa={beginAdminMfa} confirmAdminMfa={confirmAdminMfa} />}
+      {page === "admin" && role === "admin" && <AdminDashboard user={user} offers={offers} brands={adminBrands} operationalReadiness={operationalReadiness} finance={adminFinance} createPayout={createPayout} approvePayout={approvePayout} markPayoutPaid={markPayoutPaid} cancelPayout={cancelPayout} issueStatement={issueStatement} recordBrandPayment={recordBrandPayment} resolveDispute={resolveDispute} runReconciliation={runReconciliation} verifyBrand={verifyBrand} changeAdminPassword={changeAdminPassword} beginAdminMfa={beginAdminMfa} confirmAdminMfa={confirmAdminMfa} />}
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
   );
