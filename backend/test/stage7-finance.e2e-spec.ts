@@ -588,10 +588,41 @@ describe('Stage 7 finance and settlement core', () => {
     );
   });
 
-  it('issues an immutable statement, records payment and reconciles', async () => {
+  it('settles a partial return through statement, payment and balances', async () => {
+    await importRows([
+      `S7-PARTIAL-SETTLEMENT,2026-08-08T01:30:00.000Z,100000,RUB,paid,,${relationship.affiliateCode},,,`,
+    ]);
+    await importRows([
+      `S7-PARTIAL-SETTLEMENT,2026-08-08T01:30:00.000Z,100000,RUB,partially_returned,25000,${relationship.affiliateCode},,,`,
+    ]);
     await importRows([
       `S7-STATEMENT,2026-08-08T02:00:00.000Z,100000,RUB,paid,,${relationship.affiliateCode},,,`,
     ]);
+    const partialOrder = await prisma.order.findFirstOrThrow({
+      where: { externalOrderId: 'S7-PARTIAL-SETTLEMENT' },
+      include: {
+        commission: true,
+        ledgerTransactions: { include: { postings: true } },
+      },
+    });
+    expect(partialOrder.status).toBe('PARTIALLY_RETURNED');
+    expect(partialOrder.amountMinor).toBe(100000n);
+    expect(partialOrder.returnedAmountMinor).toBe(25000n);
+    expect(partialOrder.commission?.creatorAmountMinor).toBe(4875n);
+    expect(partialOrder.commission?.platformAmountMinor).toBe(2625n);
+    expect(partialOrder.commission?.totalAmountMinor).toBe(7500n);
+    expect(
+      partialOrder.ledgerTransactions.map((transaction) => transaction.type),
+    ).toEqual(expect.arrayContaining(['ACCRUAL', 'REVERSAL']));
+    for (const transaction of partialOrder.ledgerTransactions) {
+      const debit = transaction.postings
+        .filter((posting) => posting.direction === 'DEBIT')
+        .reduce((sum, posting) => sum + posting.amountMinor, 0n);
+      const credit = transaction.postings
+        .filter((posting) => posting.direction === 'CREDIT')
+        .reduce((sum, posting) => sum + posting.amountMinor, 0n);
+      expect(debit).toBe(credit);
+    }
     const start = new Date(Date.now() - 86_400_000);
     const end = new Date(Date.now() + 86_400_000);
     const due = new Date(Date.now() + 172_800_000);
@@ -612,6 +643,19 @@ describe('Stage 7 finance and settlement core', () => {
       .expect(201);
     expect(statement.body.status).toBe('ISSUED');
     expect(BigInt(statement.body.totalDueMinor)).toBeGreaterThan(0n);
+    const partialLines = statement.body.lines.filter(
+      (line: any) => line.orderId === partialOrder.id,
+    );
+    expect(partialLines).toHaveLength(2);
+    expect(
+      partialLines.reduce(
+        (sum: bigint, line: any) =>
+          sum +
+          BigInt(line.creatorAmountMinor) +
+          BigInt(line.platformAmountMinor),
+        0n,
+      ),
+    ).toBe(7500n);
 
     const duplicate = await request(app.getHttpServer())
       .post('/api/admin/statements')
@@ -648,6 +692,12 @@ describe('Stage 7 finance and settlement core', () => {
     });
     expect(stored.status).toBe('PAID');
     expect(stored.paidMinor).toBe(stored.totalDueMinor);
+    const overview = await request(app.getHttpServer())
+      .get('/api/brand/finance/overview')
+      .set(auth(brandToken))
+      .expect(200);
+    expect(overview.body.unpaidMinor).toBe('0');
+    expect(overview.body.paidMinor).toBe(overview.body.totalPayableMinor);
     expect(
       await prisma.ledgerTransaction.count({
         where: { statementId: stored.id, type: 'SETTLEMENT' },
