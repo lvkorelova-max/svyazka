@@ -118,12 +118,35 @@ enum OfferApplicationStatus {
   APPROVED
   REJECTED
   CANCELLED
+  WITHDRAWN
 }
 
 enum AffiliateRelationshipStatus {
   ACTIVE
   PAUSED
   REVOKED
+}
+
+enum CommercialCalculationPolicy {
+  LEGACY_DIRECT_RATES_V1
+  POOL_65_35_V1
+}
+
+enum ApplicationTermsStatus {
+  CURRENT_ACCEPTED
+  REACCEPTANCE_REQUIRED
+  CURRENT_REACCEPTED
+  BOUND
+}
+
+enum CreatorApplicationAction {
+  ACCEPT_COMMERCIAL_TERMS
+}
+
+enum TermsAcceptanceType {
+  INITIAL_SUBMISSION
+  UPDATED_TERMS
+  LEGACY_REVIEW
 }
 
 enum OrderImportStatus {
@@ -165,9 +188,12 @@ enum AttributionSource {
 enum CommissionStatus {
   PENDING
   HOLD
+  CONFIRMED
   AVAILABLE
+  PAYABLE
   PAID
   REVERSED
+  DISPUTED
 }
 
 enum LedgerEntryType {
@@ -181,6 +207,65 @@ enum PayoutStatus {
   APPROVED
   PAID
   CANCELLED
+  FAILED
+}
+
+enum LedgerTransactionType {
+  ACCRUAL
+  REVERSAL
+  ADJUSTMENT
+  PAYOUT
+  SETTLEMENT
+  RECOVERY
+}
+
+enum LedgerAccountType {
+  BRAND_OBLIGATION
+  CREATOR_PAYABLE
+  PLATFORM_REVENUE
+  CREATOR_RECOVERABLE
+  CASH_CLEARING
+}
+
+enum LedgerPostingDirection {
+  DEBIT
+  CREDIT
+}
+
+enum BrandStatementStatus {
+  DRAFT
+  ISSUED
+  PAID
+  OVERDUE
+  DISPUTED
+  CORRECTED
+}
+
+enum BrandPaymentStatus {
+  RECORDED
+  ALLOCATED
+  CANCELLED
+}
+
+enum FinancialDisputeStatus {
+  OPEN
+  RESOLVED
+  REJECTED
+}
+
+enum ReconciliationStatus {
+  PASSED
+  FAILED
+}
+
+enum NotificationEventType {
+  APPLICATION_COMMERCIAL_TERMS_REACCEPTANCE_REQUIRED
+}
+
+enum NotificationEventStatus {
+  PENDING
+  PROCESSED
+  FAILED
 }
 
 enum BackupKind {
@@ -229,6 +314,14 @@ model User {
   creatorKitRevisionsPublished CreatorKitRevision[]       @relation("CreatorKitRevisionPublishedBy")
   productAccessGranted         CreatorProductAccessGrant[] @relation("ProductAccessGrantedBy")
   productAccessRevoked         CreatorProductAccessGrant[] @relation("ProductAccessRevokedBy")
+  offerVersionsCreated         OfferVersion[]               @relation("OfferVersionCreatedBy")
+  commercialTermsCreated       CommercialTermsVersion[]     @relation("CommercialTermsCreatedBy")
+  applicationTermsAccepted     OfferApplicationTermsAcceptance[] @relation("ApplicationTermsAcceptedBy")
+  notificationEventsReceived   NotificationEvent[]          @relation("NotificationRecipient")
+  userNotifications            UserNotification[]
+  brandStatementsIssued        BrandStatement[]             @relation("BrandStatementIssuedBy")
+  brandPaymentsRecorded        BrandPayment[]               @relation("BrandPaymentRecordedBy")
+  disputesOpened               FinancialDispute[]           @relation("FinancialDisputeOpenedBy")
   createdAt            DateTime           @default(now())
   updatedAt            DateTime           @updatedAt
 
@@ -252,6 +345,9 @@ model BrandProfile {
   offers             Offer[]
   orderImports       OrderImport[]
   orders             Order[]
+  statements         BrandStatement[]
+  payments           BrandPayment[]
+  disputes           FinancialDispute[]
   createdAt          DateTime                @default(now())
   updatedAt          DateTime                @updatedAt
 
@@ -273,6 +369,7 @@ model CreatorProfile {
   ledgerEntries          LedgerEntry[]
   payouts                Payout[]
   productAccessGrants    CreatorProductAccessGrant[]
+  payoutItems            PayoutItem[]
   createdAt              DateTime                @default(now())
   updatedAt              DateTime                @updatedAt
 }
@@ -281,6 +378,8 @@ model Offer {
   id                      String                  @id @default(uuid()) @db.Uuid
   brandId                 String                  @db.Uuid
   imageId                 String?                 @unique @db.Uuid
+  currentOfferVersionId   String?                 @unique @db.Uuid
+  currentCommercialTermsId String?                @unique @db.Uuid
   title                   String                  @db.VarChar(200)
   description             String
   productUrl              String?                 @db.VarChar(1000)
@@ -303,11 +402,87 @@ model Offer {
   orders                  Order[]
   commissions             Commission[]
   productAccessGrants     CreatorProductAccessGrant[]
+  versions                OfferVersion[]          @relation("OfferVersions")
+  currentVersion          OfferVersion?           @relation("CurrentOfferVersion", fields: [currentOfferVersionId], references: [id], onDelete: Restrict)
+  commercialTermsVersions CommercialTermsVersion[] @relation("OfferCommercialTermsVersions")
+  currentCommercialTerms  CommercialTermsVersion? @relation("CurrentCommercialTerms", fields: [currentCommercialTermsId], references: [id], onDelete: Restrict)
+  applicationTermsObservations OfferApplicationTermsObservation[]
+  commercialAgreements    AffiliateCommercialAgreement[]
+  brandStatementLines     BrandStatementLine[]
   createdAt               DateTime                @default(now())
   updatedAt               DateTime                @updatedAt
 
   @@index([brandId, status])
   @@index([status, createdAt])
+}
+
+model OfferVersion {
+  id                    String          @id @default(uuid()) @db.Uuid
+  offerId               String          @db.Uuid
+  version               Int
+  title                 String          @db.VarChar(200)
+  description           String
+  productUrl            String?         @db.VarChar(1000)
+  productPriceMinor     BigInt
+  imageId               String?         @db.Uuid
+  promotionWithoutProduct PromotionWithoutProduct
+  discoveryCategory     String?         @db.VarChar(120)
+  discoveryTags         String[]        @default([])
+  allowedPromotionFormats String[]      @default([])
+  visibility            OfferStatus
+  creatorKitRevisionId  String?         @db.Uuid
+  contentHash           String          @db.Char(64)
+  createdByUserId       String          @db.Uuid
+  requestId             String          @db.VarChar(100)
+  offer                 Offer           @relation("OfferVersions", fields: [offerId], references: [id], onDelete: Restrict)
+  activeFor             Offer?          @relation("CurrentOfferVersion")
+  createdBy             User            @relation("OfferVersionCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  applicationObservations OfferApplicationTermsObservation[]
+  createdAt             DateTime        @default(now())
+
+  @@unique([offerId, version])
+  @@unique([offerId, contentHash])
+  @@index([offerId, createdAt])
+}
+
+model CommercialTermsVersion {
+  id                              String                      @id @default(uuid()) @db.Uuid
+  offerId                         String                      @db.Uuid
+  version                         Int
+  calculationPolicy              CommercialCalculationPolicy
+  totalCommissionPoolBps          Int
+  splitPolicyCode                 String                      @db.VarChar(80)
+  creatorPoolShareBps             Int
+  platformPoolShareBps            Int
+  creatorEffectiveGmvBps          Int
+  platformEffectiveGmvBps         Int
+  currency                        String                      @db.Char(3)
+  attributionPolicySnapshot       Json
+  attributionWindowSnapshot       Json
+  commissionEligibilitySnapshot  Json
+  confirmationPolicySnapshot      Json
+  returnPolicySnapshot            Json
+  cancellationPolicySnapshot      Json
+  payoutPolicySnapshot            Json
+  payoutScheduleSnapshot          Json
+  settlementModelSnapshot         Json
+  minimumPayoutMinor              BigInt
+  contractFingerprint             String                      @db.Char(64)
+  createdByUserId                 String                      @db.Uuid
+  requestId                       String                      @db.VarChar(100)
+  offer                           Offer                       @relation("OfferCommercialTermsVersions", fields: [offerId], references: [id], onDelete: Restrict)
+  activeFor                       Offer?                      @relation("CurrentCommercialTerms")
+  createdBy                       User                        @relation("CommercialTermsCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  observations                    OfferApplicationTermsObservation[]
+  acceptances                     OfferApplicationTermsAcceptance[]
+  applicableApplications          OfferApplication[]         @relation("ApplicationApplicableTerms")
+  acceptedApplications            OfferApplication[]         @relation("ApplicationLatestAcceptedTerms")
+  agreements                      AffiliateCommercialAgreement[]
+  createdAt                       DateTime                    @default(now())
+
+  @@unique([offerId, version])
+  @@unique([offerId, contractFingerprint])
+  @@index([offerId, createdAt])
 }
 
 model OfferImage {
@@ -586,22 +761,91 @@ model CreatorProductAccessGrant {
 }
 
 model OfferApplication {
-  id                    String                 @id @default(uuid()) @db.Uuid
-  offerId               String                 @db.Uuid
-  creatorId             String                 @db.Uuid
-  message               String?                @db.VarChar(2000)
-  status                OfferApplicationStatus @default(PENDING)
-  reviewedAt            DateTime?
-  reviewedByUserId      String?                @db.Uuid
-  offer                 Offer                  @relation(fields: [offerId], references: [id], onDelete: Restrict)
-  creator               CreatorProfile         @relation(fields: [creatorId], references: [id], onDelete: Restrict)
-  reviewedBy            User?                  @relation("ApplicationReviewer", fields: [reviewedByUserId], references: [id], onDelete: Restrict)
-  affiliateRelationship AffiliateRelationship?
-  createdAt             DateTime               @default(now())
-  updatedAt             DateTime               @updatedAt
+  id                           String                   @id @default(uuid()) @db.Uuid
+  offerId                      String                   @db.Uuid
+  creatorId                    String                   @db.Uuid
+  message                      String?                  @db.VarChar(2000)
+  status                       OfferApplicationStatus   @default(PENDING)
+  termsStatus                  ApplicationTermsStatus   @default(CURRENT_ACCEPTED)
+  applicableCommercialTermsId  String?                  @db.Uuid
+  latestAcceptedTermsId        String?                  @db.Uuid
+  requiredCreatorAction        CreatorApplicationAction?
+  creatorActionRequiredAt      DateTime?
+  creatorActionResolvedAt      DateTime?
+  termsChangedAt               DateTime?
+  termsReacceptedAt            DateTime?
+  version                      Int                      @default(1)
+  reviewedAt                   DateTime?
+  reviewedByUserId             String?                  @db.Uuid
+  offer                        Offer                    @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  creator                      CreatorProfile           @relation(fields: [creatorId], references: [id], onDelete: Restrict)
+  reviewedBy                   User?                    @relation("ApplicationReviewer", fields: [reviewedByUserId], references: [id], onDelete: Restrict)
+  applicableCommercialTerms    CommercialTermsVersion?  @relation("ApplicationApplicableTerms", fields: [applicableCommercialTermsId], references: [id], onDelete: Restrict)
+  latestAcceptedTerms          CommercialTermsVersion?  @relation("ApplicationLatestAcceptedTerms", fields: [latestAcceptedTermsId], references: [id], onDelete: Restrict)
+  termsObservation             OfferApplicationTermsObservation?
+  termsAcceptances             OfferApplicationTermsAcceptance[]
+  affiliateRelationship        AffiliateRelationship?
+  commercialAgreement          AffiliateCommercialAgreement?
+  notificationEvents           NotificationEvent[]
+  userNotifications            UserNotification[]
+  createdAt                    DateTime                 @default(now())
+  updatedAt                    DateTime                 @updatedAt
 
   @@index([creatorId, status, createdAt])
   @@index([offerId, status, createdAt])
+  @@index([creatorId, requiredCreatorAction, creatorActionRequiredAt])
+  @@index([applicableCommercialTermsId])
+  @@index([latestAcceptedTermsId])
+}
+
+model OfferApplicationTermsObservation {
+  id                            String                      @id @default(uuid()) @db.Uuid
+  applicationId                 String                      @unique @db.Uuid
+  offerId                       String                      @db.Uuid
+  observedOfferVersionId        String?                     @db.Uuid
+  commercialTermsVersionId      String                      @db.Uuid
+  calculationPolicy             CommercialCalculationPolicy
+  totalCommissionPoolBps        Int
+  creatorPoolShareBps           Int
+  platformPoolShareBps          Int
+  displayedCreatorEffectiveBps  Int
+  displayedPlatformEffectiveBps Int
+  currency                      String                      @db.Char(3)
+  attributionPolicySnapshot     Json
+  confirmationPolicySnapshot    Json
+  returnPolicySnapshot          Json
+  payoutPolicySnapshot          Json
+  observedAt                    DateTime
+  submittedAt                   DateTime
+  requestId                     String                      @db.VarChar(100)
+  application                   OfferApplication            @relation(fields: [applicationId], references: [id], onDelete: Restrict)
+  offer                         Offer                       @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  observedOfferVersion          OfferVersion?               @relation(fields: [observedOfferVersionId], references: [id], onDelete: Restrict)
+  commercialTermsVersion        CommercialTermsVersion      @relation(fields: [commercialTermsVersionId], references: [id], onDelete: Restrict)
+  createdAt                     DateTime                     @default(now())
+
+  @@index([offerId, submittedAt])
+  @@index([commercialTermsVersionId])
+}
+
+model OfferApplicationTermsAcceptance {
+  id                           String                      @id @default(uuid()) @db.Uuid
+  applicationId                String                      @db.Uuid
+  commercialTermsVersionId     String                      @db.Uuid
+  acceptanceType               TermsAcceptanceType
+  displayedCreatorEffectiveBps Int
+  acceptedAt                   DateTime
+  actorUserId                  String                      @db.Uuid
+  requestId                    String                      @db.VarChar(100)
+  source                       String                      @db.VarChar(80)
+  application                  OfferApplication            @relation(fields: [applicationId], references: [id], onDelete: Restrict)
+  commercialTermsVersion       CommercialTermsVersion      @relation(fields: [commercialTermsVersionId], references: [id], onDelete: Restrict)
+  actor                        User                        @relation("ApplicationTermsAcceptedBy", fields: [actorUserId], references: [id], onDelete: Restrict)
+  commercialAgreements         AffiliateCommercialAgreement[]
+  createdAt                    DateTime                    @default(now())
+
+  @@unique([applicationId, commercialTermsVersionId, acceptanceType])
+  @@index([applicationId, acceptedAt])
 }
 
 model AffiliateRelationship {
@@ -623,11 +867,56 @@ model AffiliateRelationship {
   orders         Order[]
   commissions    Commission[]
   importRows     OrderImportRow[]
+  commercialAgreement AffiliateCommercialAgreement?
+  payoutItems    PayoutItem[]
   createdAt      DateTime                    @default(now())
   updatedAt      DateTime                    @updatedAt
 
   @@index([creatorId, status, createdAt])
   @@index([offerId, status, createdAt])
+}
+
+model AffiliateCommercialAgreement {
+  id                            String                      @id @default(uuid()) @db.Uuid
+  affiliateRelationshipId       String                      @unique @db.Uuid
+  applicationId                 String                      @unique @db.Uuid
+  applicationTermsAcceptanceId  String                      @db.Uuid
+  offerId                       String                      @db.Uuid
+  offerVersionIdAtActivation    String?                     @db.Uuid
+  commercialTermsVersionId      String                      @db.Uuid
+  commercialTermsVersionNumber  Int
+  calculationPolicy             CommercialCalculationPolicy
+  totalCommissionPoolBps        Int
+  creatorPoolShareBps           Int
+  platformPoolShareBps          Int
+  creatorEffectiveGmvBps        Int
+  platformEffectiveGmvBps       Int
+  currency                      String                      @db.Char(3)
+  attributionPolicySnapshot     Json
+  attributionWindowSnapshot     Json
+  commissionEligibilitySnapshot Json
+  confirmationPolicySnapshot    Json
+  returnPolicySnapshot          Json
+  cancellationPolicySnapshot    Json
+  payoutPolicySnapshot          Json
+  payoutScheduleSnapshot        Json
+  settlementModelSnapshot       Json
+  minimumPayoutMinor            BigInt
+  acceptedAt                    DateTime
+  approvedAt                    DateTime
+  activatedAt                   DateTime
+  createdByRequestId            String                      @db.VarChar(100)
+  affiliateRelationship         AffiliateRelationship       @relation(fields: [affiliateRelationshipId], references: [id], onDelete: Restrict)
+  application                   OfferApplication             @relation(fields: [applicationId], references: [id], onDelete: Restrict)
+  applicationTermsAcceptance    OfferApplicationTermsAcceptance @relation(fields: [applicationTermsAcceptanceId], references: [id], onDelete: Restrict)
+  offer                         Offer                        @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  commercialTermsVersion        CommercialTermsVersion       @relation(fields: [commercialTermsVersionId], references: [id], onDelete: Restrict)
+  orders                        Order[]
+  importRows                    OrderImportRow[]
+  createdAt                     DateTime                     @default(now())
+
+  @@index([offerId, activatedAt])
+  @@index([commercialTermsVersionId])
 }
 
 model Click {
@@ -691,10 +980,16 @@ model OrderImportRow {
   clickId                          String?                @db.Uuid
   offerId                          String?                @db.Uuid
   attributedRelationshipId         String?                @db.Uuid
+  affiliateCommercialAgreementId   String?                @db.Uuid
   attributionSource                AttributionSource?
   existingOrderId                  String?                @db.Uuid
   creatorCommissionBpsSnapshot     Int?
   platformCommissionBpsSnapshot    Int?
+  totalCommissionPoolBpsSnapshot   Int?
+  creatorPoolShareBpsSnapshot      Int?
+  platformPoolShareBpsSnapshot     Int?
+  commercialTermsVersionSnapshot   Int?
+  calculationPolicySnapshot        CommercialCalculationPolicy?
   previewCreatorAmountKopecks      Int?
   previewPlatformAmountKopecks     Int?
   errors                           String[]               @default([])
@@ -702,6 +997,7 @@ model OrderImportRow {
   rawData                          Json
   orderImport                      OrderImport            @relation(fields: [orderImportId], references: [id], onDelete: Restrict)
   attributedRelationship           AffiliateRelationship? @relation(fields: [attributedRelationshipId], references: [id], onDelete: Restrict)
+  affiliateCommercialAgreement     AffiliateCommercialAgreement? @relation(fields: [affiliateCommercialAgreementId], references: [id], onDelete: Restrict)
   click                            Click?                 @relation(fields: [clickId], references: [id], onDelete: Restrict)
   existingOrder                    Order?                 @relation("ExistingOrderPreview", fields: [existingOrderId], references: [id], onDelete: Restrict)
   createdAt                        DateTime               @default(now())
@@ -709,6 +1005,7 @@ model OrderImportRow {
   @@unique([orderImportId, rowNumber])
   @@index([orderImportId, status, action])
   @@index([attributedRelationshipId])
+  @@index([affiliateCommercialAgreementId])
   @@index([existingOrderId])
 }
 
@@ -718,22 +1015,38 @@ model Order {
   offerId                 String                 @db.Uuid
   orderImportId           String                 @db.Uuid
   affiliateRelationshipId String?                @db.Uuid
+  affiliateCommercialAgreementId String?         @db.Uuid
   externalOrderId         String                 @db.VarChar(160)
   orderDate               DateTime
   amountKopecks           Int
   returnedAmountKopecks   Int                    @default(0)
+  amountMinor             BigInt?
+  returnedAmountMinor     BigInt?
   currency                String                 @db.Char(3)
   status                  OrderStatus
   attributionSource       AttributionSource
+  attributionIdentifier   String?                @db.VarChar(200)
+  attributedAt            DateTime?
   affiliateCode           String?                @db.VarChar(64)
   promoCode               String?                @db.VarChar(12)
   clickId                 String?                @db.Uuid
   creatorCommissionBps    Int
   platformCommissionBps   Int
+  totalCommissionPoolBps  Int?
+  creatorPoolShareBps     Int?
+  platformPoolShareBps    Int?
+  totalCommissionAmountMinor BigInt?
+  creatorCommissionAmountMinor BigInt?
+  platformCommissionAmountMinor BigInt?
+  commercialTermsVersionNumber Int?
+  calculationPolicy       CommercialCalculationPolicy?
+  confirmedAt             DateTime?
+  payableAt               DateTime?
   brand                   BrandProfile           @relation(fields: [brandId], references: [id], onDelete: Restrict)
   offer                   Offer                  @relation(fields: [offerId], references: [id], onDelete: Restrict)
   orderImport             OrderImport            @relation(fields: [orderImportId], references: [id], onDelete: Restrict)
   affiliateRelationship   AffiliateRelationship? @relation(fields: [affiliateRelationshipId], references: [id], onDelete: Restrict)
+  affiliateCommercialAgreement AffiliateCommercialAgreement? @relation(fields: [affiliateCommercialAgreementId], references: [id], onDelete: Restrict)
   click                   Click?                 @relation(fields: [clickId], references: [id], onDelete: Restrict)
   commission              Commission?
   previewRows             OrderImportRow[]       @relation("ExistingOrderPreview")
@@ -741,11 +1054,15 @@ model Order {
   createdAt               DateTime               @default(now())
   updatedAt               DateTime               @updatedAt
   ledgerEntries           LedgerEntry[]
+  ledgerTransactions      LedgerTransaction[]
+  statementLines          BrandStatementLine[]
+  disputes                FinancialDispute[]
 
   @@unique([brandId, externalOrderId])
   @@index([brandId, orderDate])
   @@index([offerId, orderDate])
   @@index([affiliateRelationshipId, orderDate])
+  @@index([affiliateCommercialAgreementId, orderDate])
   @@index([clickId])
 }
 
@@ -758,16 +1075,28 @@ model Commission {
   payoutId                String?               @db.Uuid
   creatorAmountKopecks    Int
   platformAmountKopecks   Int
+  creatorAmountMinor      BigInt?
+  platformAmountMinor     BigInt?
+  totalAmountMinor        BigInt?
+  currency                String                @default("RUB") @db.Char(3)
   debtAmountKopecks       Int                   @default(0)
+  recoverableAmountMinor  BigInt                @default(0)
   hasPostPayoutDebt       Boolean               @default(false)
   status                  CommissionStatus
   holdUntil               DateTime?
+  confirmedAt             DateTime?
+  payableAt               DateTime?
+  disputedAt              DateTime?
   order                   Order                 @relation(fields: [orderId], references: [id], onDelete: Restrict)
   affiliateRelationship   AffiliateRelationship @relation(fields: [affiliateRelationshipId], references: [id], onDelete: Restrict)
   creator                 CreatorProfile        @relation(fields: [creatorId], references: [id], onDelete: Restrict)
   offer                   Offer                 @relation(fields: [offerId], references: [id], onDelete: Restrict)
   payout                  Payout?               @relation(fields: [payoutId], references: [id], onDelete: Restrict)
   ledgerEntries           LedgerEntry[]
+  ledgerTransactions      LedgerTransaction[]
+  payoutItems             PayoutItem[]
+  statementLines          BrandStatementLine[]
+  disputes                FinancialDispute[]
   createdAt               DateTime              @default(now())
   updatedAt               DateTime              @updatedAt
 
@@ -802,6 +1131,7 @@ model Payout {
   id               String         @id @default(uuid()) @db.Uuid
   creatorId        String         @db.Uuid
   amountKopecks    BigInt
+  currency         String         @default("RUB") @db.Char(3)
   status           PayoutStatus   @default(DRAFT)
   createdByUserId  String         @db.Uuid
   approvedByUserId String?        @db.Uuid
@@ -815,6 +1145,8 @@ model Payout {
   cancelledBy      User?          @relation("PayoutCancelledBy", fields: [cancelledByUserId], references: [id], onDelete: Restrict)
   commissions      Commission[]
   ledgerEntries    LedgerEntry[]
+  payoutItems      PayoutItem[]
+  ledgerTransactions LedgerTransaction[]
   createdAt        DateTime       @default(now())
   approvedAt       DateTime?
   paidAt           DateTime?
@@ -824,6 +1156,249 @@ model Payout {
   @@index([creatorId, status, createdAt])
   @@index([status, createdAt])
   @@index([cancelledByUserId])
+}
+
+model LedgerAccount {
+  id          String            @id @default(uuid()) @db.Uuid
+  accountType LedgerAccountType
+  ownerType   String            @db.VarChar(80)
+  ownerId     String            @db.VarChar(160)
+  currency    String            @db.Char(3)
+  postings    LedgerPosting[]
+  createdAt   DateTime          @default(now())
+
+  @@unique([accountType, ownerType, ownerId, currency])
+  @@index([ownerType, ownerId, currency])
+}
+
+model LedgerTransaction {
+  id             String                @id @default(uuid()) @db.Uuid
+  type           LedgerTransactionType
+  eventKey       String                @unique @db.VarChar(240)
+  currency       String                @db.Char(3)
+  orderId        String?               @db.Uuid
+  commissionId   String?               @db.Uuid
+  payoutId       String?               @db.Uuid
+  statementId    String?               @db.Uuid
+  source         String                @db.VarChar(80)
+  reason         String?               @db.VarChar(500)
+  requestId      String                @db.VarChar(100)
+  metadata       Json?
+  order          Order?                @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  commission     Commission?           @relation(fields: [commissionId], references: [id], onDelete: Restrict)
+  payout         Payout?               @relation(fields: [payoutId], references: [id], onDelete: Restrict)
+  statement      BrandStatement?       @relation(fields: [statementId], references: [id], onDelete: Restrict)
+  postings       LedgerPosting[]
+  createdAt      DateTime              @default(now())
+
+  @@index([orderId, createdAt])
+  @@index([commissionId, createdAt])
+  @@index([payoutId, createdAt])
+  @@index([statementId, createdAt])
+}
+
+model LedgerPosting {
+  id            String                 @id @default(uuid()) @db.Uuid
+  transactionId String                 @db.Uuid
+  accountId     String                 @db.Uuid
+  direction     LedgerPostingDirection
+  amountMinor   BigInt
+  transaction   LedgerTransaction      @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  account       LedgerAccount          @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  createdAt     DateTime               @default(now())
+
+  @@index([transactionId])
+  @@index([accountId, createdAt])
+}
+
+model BrandStatement {
+  id                     String               @id @default(uuid()) @db.Uuid
+  brandId                String               @db.Uuid
+  periodStart            DateTime
+  periodEnd              DateTime
+  currency               String               @db.Char(3)
+  status                 BrandStatementStatus @default(DRAFT)
+  creatorObligationsMinor BigInt              @default(0)
+  platformFeeMinor       BigInt                @default(0)
+  reversalsMinor         BigInt                @default(0)
+  adjustmentsMinor       BigInt                @default(0)
+  totalDueMinor          BigInt                @default(0)
+  paidMinor              BigInt                @default(0)
+  issuedAt               DateTime?
+  dueAt                  DateTime?
+  paidAt                 DateTime?
+  overdueAt              DateTime?
+  correctedStatementId   String?               @db.Uuid
+  issuedByUserId         String?               @db.Uuid
+  contentHash            String?               @db.Char(64)
+  brand                   BrandProfile         @relation(fields: [brandId], references: [id], onDelete: Restrict)
+  issuedBy               User?                 @relation("BrandStatementIssuedBy", fields: [issuedByUserId], references: [id], onDelete: Restrict)
+  correctedStatement     BrandStatement?       @relation("StatementCorrections", fields: [correctedStatementId], references: [id], onDelete: Restrict)
+  corrections            BrandStatement[]      @relation("StatementCorrections")
+  lines                  BrandStatementLine[]
+  payments               BrandPaymentAllocation[]
+  ledgerTransactions     LedgerTransaction[]
+  disputes               FinancialDispute[]
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
+
+  @@unique([brandId, periodStart, periodEnd, currency, correctedStatementId])
+  @@index([brandId, status, dueAt])
+}
+
+model BrandStatementLine {
+  id                  String         @id @default(uuid()) @db.Uuid
+  statementId         String         @db.Uuid
+  offerId             String         @db.Uuid
+  orderId             String?        @db.Uuid
+  commissionId        String?        @db.Uuid
+  lineType            String         @db.VarChar(80)
+  creatorAmountMinor  BigInt         @default(0)
+  platformAmountMinor BigInt         @default(0)
+  adjustmentMinor     BigInt         @default(0)
+  description         String?        @db.VarChar(500)
+  statement           BrandStatement @relation(fields: [statementId], references: [id], onDelete: Restrict)
+  offer               Offer          @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  order               Order?         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  commission          Commission?    @relation(fields: [commissionId], references: [id], onDelete: Restrict)
+  createdAt           DateTime       @default(now())
+
+  @@index([statementId, offerId])
+  @@index([orderId])
+}
+
+model BrandPayment {
+  id               String             @id @default(uuid()) @db.Uuid
+  brandId          String             @db.Uuid
+  currency         String             @db.Char(3)
+  amountMinor      BigInt
+  status           BrandPaymentStatus @default(RECORDED)
+  reference        String?            @db.VarChar(255)
+  paidAt           DateTime
+  recordedByUserId String             @db.Uuid
+  cancelledAt      DateTime?
+  cancellationReason String?          @db.VarChar(500)
+  brand            BrandProfile       @relation(fields: [brandId], references: [id], onDelete: Restrict)
+  recordedBy       User               @relation("BrandPaymentRecordedBy", fields: [recordedByUserId], references: [id], onDelete: Restrict)
+  allocations      BrandPaymentAllocation[]
+  createdAt        DateTime           @default(now())
+
+  @@index([brandId, currency, paidAt])
+}
+
+model BrandPaymentAllocation {
+  id             String         @id @default(uuid()) @db.Uuid
+  paymentId      String         @db.Uuid
+  statementId    String         @db.Uuid
+  amountMinor    BigInt
+  payment        BrandPayment   @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  statement      BrandStatement @relation(fields: [statementId], references: [id], onDelete: Restrict)
+  createdAt      DateTime       @default(now())
+
+  @@unique([paymentId, statementId])
+  @@index([statementId])
+}
+
+model PayoutItem {
+  id                      String                @id @default(uuid()) @db.Uuid
+  payoutId                String                @db.Uuid
+  commissionId            String                @db.Uuid
+  affiliateRelationshipId String                @db.Uuid
+  creatorId               String                @db.Uuid
+  amountMinor             BigInt
+  recoveryAmountMinor     BigInt                @default(0)
+  currency                String                @db.Char(3)
+  payout                  Payout                @relation(fields: [payoutId], references: [id], onDelete: Restrict)
+  commission              Commission            @relation(fields: [commissionId], references: [id], onDelete: Restrict)
+  affiliateRelationship   AffiliateRelationship @relation(fields: [affiliateRelationshipId], references: [id], onDelete: Restrict)
+  creator                 CreatorProfile        @relation(fields: [creatorId], references: [id], onDelete: Restrict)
+  createdAt               DateTime              @default(now())
+
+  @@unique([payoutId, commissionId])
+  @@index([creatorId, currency])
+}
+
+model FinancialDispute {
+  id             String                 @id @default(uuid()) @db.Uuid
+  brandId        String                 @db.Uuid
+  orderId        String                 @db.Uuid
+  commissionId   String?                @db.Uuid
+  statementId    String?                @db.Uuid
+  status         FinancialDisputeStatus @default(OPEN)
+  reason         String                 @db.VarChar(1000)
+  openedByUserId String                 @db.Uuid
+  openedAt       DateTime               @default(now())
+  resolvedAt     DateTime?
+  resolution     String?                @db.VarChar(1000)
+  brand          BrandProfile           @relation(fields: [brandId], references: [id], onDelete: Restrict)
+  order          Order                  @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  commission     Commission?            @relation(fields: [commissionId], references: [id], onDelete: Restrict)
+  statement      BrandStatement?        @relation(fields: [statementId], references: [id], onDelete: Restrict)
+  openedBy       User                   @relation("FinancialDisputeOpenedBy", fields: [openedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([brandId, status, openedAt])
+  @@index([orderId])
+}
+
+model ReconciliationRun {
+  id             String               @id @default(uuid()) @db.Uuid
+  status         ReconciliationStatus
+  scope          String               @db.VarChar(80)
+  currency       String?              @db.Char(3)
+  checkedAt      DateTime             @default(now())
+  mismatchCount  Int                  @default(0)
+  details        Json?
+  requestId      String               @db.VarChar(100)
+
+  @@index([status, checkedAt])
+}
+
+model NotificationEvent {
+  id               String                  @id @default(uuid()) @db.Uuid
+  eventType        NotificationEventType
+  aggregateType    String                  @db.VarChar(80)
+  aggregateId      String                  @db.VarChar(160)
+  applicationId    String?                 @db.Uuid
+  actorUserId      String?                 @db.Uuid
+  recipientUserId  String                  @db.Uuid
+  requestId        String                  @db.VarChar(100)
+  deduplicationKey String                  @unique @db.VarChar(240)
+  payload          Json
+  occurredAt       DateTime                @default(now())
+  processingStatus NotificationEventStatus @default(PENDING)
+  processedAt      DateTime?
+  attemptCount     Int                     @default(0)
+  lastErrorCode    String?                 @db.VarChar(120)
+  application      OfferApplication?       @relation(fields: [applicationId], references: [id], onDelete: Restrict)
+  recipient        User                    @relation("NotificationRecipient", fields: [recipientUserId], references: [id], onDelete: Restrict)
+  notification     UserNotification?
+
+  @@index([processingStatus, occurredAt])
+  @@index([recipientUserId, occurredAt])
+}
+
+model UserNotification {
+  id              String             @id @default(uuid()) @db.Uuid
+  eventId         String             @unique @db.Uuid
+  recipientUserId String             @db.Uuid
+  applicationId   String?            @db.Uuid
+  type            String             @db.VarChar(120)
+  entityType      String             @db.VarChar(80)
+  entityId        String             @db.VarChar(160)
+  titleKey        String             @db.VarChar(160)
+  messageData     Json
+  actionUrl       String?            @db.VarChar(500)
+  actionRequired  Boolean            @default(false)
+  createdAt       DateTime           @default(now())
+  readAt          DateTime?
+  resolvedAt      DateTime?
+  supersededAt    DateTime?
+  event           NotificationEvent  @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  recipient       User               @relation(fields: [recipientUserId], references: [id], onDelete: Restrict)
+  application     OfferApplication?  @relation(fields: [applicationId], references: [id], onDelete: Restrict)
+
+  @@index([recipientUserId, readAt])
+  @@index([recipientUserId, actionRequired, resolvedAt])
 }
 
 model AuthSession {
