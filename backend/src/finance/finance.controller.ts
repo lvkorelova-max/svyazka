@@ -26,6 +26,12 @@ import {
 } from './dto/list-finance-query.dto';
 import { FinanceService } from './finance.service';
 import { Body } from '@nestjs/common';
+import {
+  IssueBrandStatementDto,
+  OpenFinancialDisputeDto,
+  RecordBrandPaymentDto,
+  ResolveFinancialDisputeDto,
+} from './dto/settlement.dto';
 
 type CsvUpload = {
   buffer: Buffer;
@@ -115,6 +121,30 @@ export class FinanceController {
     return this.finance.getBrandAnalytics(user.id, query);
   }
 
+  @Get('brand/finance/overview')
+  @Roles(UserRole.BRAND)
+  getBrandFinanceOverview(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: ListFinanceQueryDto,
+  ) {
+    return this.finance.getBrandFinanceOverview(user.id, query);
+  }
+
+  @Get('brand/statements')
+  @Roles(UserRole.BRAND)
+  listBrandStatements(@CurrentUser() user: AuthenticatedUser) {
+    return this.finance.listBrandStatements(user.id);
+  }
+
+  @Post('brand/disputes')
+  @Roles(UserRole.BRAND)
+  openDispute(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: OpenFinancialDisputeDto,
+  ) {
+    return this.finance.openDispute(user.id, dto);
+  }
+
   @Get('brand/analytics/creators')
   @Roles(UserRole.BRAND)
   getCreatorAnalytics(
@@ -157,6 +187,77 @@ export class FinanceController {
     return this.finance.getCreatorEarningsSummary(user.id);
   }
 
+  @Get('creator/payouts')
+  @Roles(UserRole.CREATOR)
+  listCreatorPayouts(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: ListFinanceQueryDto,
+  ) {
+    return this.finance.listCreatorPayouts(user.id, query);
+  }
+
+  @Get('admin/finance/overview')
+  @Roles(UserRole.ADMIN)
+  getAdminFinanceOverview() {
+    return this.finance.getAdminFinanceOverview();
+  }
+
+  @Get('admin/statements')
+  @Roles(UserRole.ADMIN)
+  listAdminStatements() {
+    return this.finance.listAdminStatements();
+  }
+
+  @Post('admin/statements')
+  @Roles(UserRole.ADMIN)
+  @UseGuards(AdminSecurityGuard)
+  issueBrandStatement(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: IssueBrandStatementDto,
+  ) {
+    return this.finance.issueBrandStatement(user.id, dto);
+  }
+
+  @Post('admin/brand-payments')
+  @Roles(UserRole.ADMIN)
+  @UseGuards(AdminSecurityGuard)
+  recordBrandPayment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: RecordBrandPaymentDto,
+  ) {
+    return this.finance.recordBrandPayment(user.id, dto);
+  }
+
+  @Get('admin/brand-payments')
+  @Roles(UserRole.ADMIN)
+  listBrandPayments() {
+    return this.finance.listAdminBrandPayments();
+  }
+
+  @Get('admin/disputes')
+  @Roles(UserRole.ADMIN)
+  listAdminDisputes() {
+    return this.finance.listAdminDisputes();
+  }
+
+  @Post('admin/disputes/:id/resolve')
+  @Roles(UserRole.ADMIN)
+  @UseGuards(AdminSecurityGuard)
+  resolveDispute(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ResolveFinancialDisputeDto,
+  ) {
+    return this.finance.resolveDispute(user.id, id, dto);
+  }
+
+  @Post('admin/reconciliation/run')
+  @Roles(UserRole.ADMIN)
+  @UseGuards(AdminSecurityGuard)
+  runReconciliation(@CurrentUser() user: AuthenticatedUser) {
+    return this.finance.runReconciliation(user.id);
+  }
+
   @Get('admin/commissions')
   @Roles(UserRole.ADMIN)
   listAdminCommissions(@Query() query: ListFinanceQueryDto) {
@@ -167,6 +268,12 @@ export class FinanceController {
   @Roles(UserRole.ADMIN)
   listLedgerEntries(@Query() query: ListFinanceQueryDto) {
     return this.finance.listLedgerEntries(query);
+  }
+
+  @Get('admin/ledger-transactions')
+  @Roles(UserRole.ADMIN)
+  listLedgerTransactions(@Query() query: ListFinanceQueryDto) {
+    return this.finance.listLedgerTransactions(query);
   }
 
   @Get('admin/payouts')

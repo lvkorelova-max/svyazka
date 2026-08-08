@@ -23,6 +23,7 @@ import { randomUUID } from 'crypto';
 import { extname } from 'path';
 import { AuthenticatedUser } from '../auth/auth.types';
 import { AuditService } from '../audit/audit.service';
+import { CommercialTermsService } from '../commercial-terms/commercial-terms.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { S3StorageService } from '../storage/storage.service';
 import { InitCreatorKitUploadDto } from './dto/init-upload.dto';
@@ -112,6 +113,7 @@ export class CreatorKitService {
     private readonly storage: S3StorageService,
     private readonly config: ConfigService,
     private readonly audit: AuditService,
+    private readonly commercialTerms: CommercialTermsService,
   ) {}
 
   async getBrandKit(userId: string, offerId: string) {
@@ -261,6 +263,21 @@ export class CreatorKitService {
       await tx.creatorKit.update({
         where: { id: kit.id },
         data: { activeRevisionId: next.id, draftRevisionId: null },
+      });
+      const versionedOffer = await tx.offer.findUniqueOrThrow({
+        where: { id: offer.id },
+        include: {
+          creatorKit: { select: { activeRevisionId: true } },
+        },
+      });
+      const offerVersion = await this.commercialTerms.createOfferVersion(
+        tx,
+        versionedOffer,
+        userId,
+      );
+      await tx.offer.update({
+        where: { id: offer.id },
+        data: { currentOfferVersionId: offerVersion.id },
       });
       return next;
     });

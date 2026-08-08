@@ -9,6 +9,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { CreateOfferDto } from './dto/create-offer.dto';
 import { InitOfferImageUploadDto } from './dto/init-offer-image-upload.dto';
 import { UpdateOfferDto } from './dto/update-offer.dto';
+import { UpdateCommercialTermsDto } from './dto/update-commercial-terms.dto';
 import { OffersService } from './offers.service';
 
 @Controller()
@@ -45,6 +46,16 @@ export class OffersController {
     @Body() dto: UpdateOfferDto,
   ) {
     return this.offers.updateOwn(user.id, offerId, dto);
+  }
+
+  @Post('brand/offers/:id/commercial-terms')
+  @Roles(UserRole.BRAND)
+  updateCommercialTerms(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) offerId: string,
+    @Body() dto: UpdateCommercialTermsDto,
+  ) {
+    return this.offers.updateCommercialTerms(user.id, offerId, dto);
   }
 
   @Post('brand/offers/:id/image/uploads')

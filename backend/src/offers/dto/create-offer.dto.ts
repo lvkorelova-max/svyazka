@@ -38,7 +38,15 @@ export class CreateOfferDto {
   @IsInt()
   @Min(0)
   @Max(10_000)
-  creatorCommissionBps: number;
+  @IsOptional()
+  creatorCommissionBps?: number;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(10_000)
+  @IsOptional()
+  totalCommissionPoolBps?: number;
 
   @IsEnum(PromotionWithoutProduct)
   promotionWithoutProduct: PromotionWithoutProduct;

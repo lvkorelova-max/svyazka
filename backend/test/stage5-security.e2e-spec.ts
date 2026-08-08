@@ -6,6 +6,7 @@ import { AppModule } from '../src/app.module';
 import { generateTotpCode } from '../src/auth/totp';
 import { BigIntSerializerInterceptor } from '../src/common/interceptors/bigint-serializer.interceptor';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { resetTestDatabase } from './reset-test-database';
 
 describe('Stage 5B authorization hardening', () => {
   let app: INestApplication;
@@ -51,40 +52,7 @@ describe('Stage 5B authorization hardening', () => {
   beforeAll(async () => {
     app = await createApplication();
     prisma = app.get(PrismaService);
-    await prisma.authSession.deleteMany();
-    await prisma.passwordResetToken.deleteMany();
-    await prisma.adminRecoveryCode.deleteMany();
-    await prisma.auditLog.deleteMany();
-    await prisma.ledgerEntry.deleteMany();
-    await prisma.commission.deleteMany();
-    await prisma.payout.deleteMany();
-    await prisma.orderImportRow.deleteMany();
-    await prisma.order.deleteMany();
-    await prisma.orderImport.deleteMany();
-    await prisma.click.deleteMany();
-    await prisma.creatorProductAccessGrant.deleteMany();
-    await prisma.affiliateRelationship.deleteMany();
-    await prisma.offerApplication.deleteMany();
-    await prisma.publicationRequirements.deleteMany();
-    await prisma.creatorKitRevisionAsset.deleteMany();
-    await prisma.creatorKitScenario.deleteMany();
-    await prisma.creatorKitFact.deleteMany();
-    await prisma.creatorKitClaim.deleteMany();
-    await prisma.creatorKitRule.deleteMany();
-    await prisma.creatorKitBrandContent.deleteMany();
-    await prisma.creatorKitProductContent.deleteMany();
-    await prisma.creatorKit.updateMany({
-      data: { activeRevisionId: null, draftRevisionId: null },
-    });
-    await prisma.creatorKitRevision.deleteMany();
-    await prisma.creatorKitAsset.deleteMany();
-    await prisma.creatorKit.deleteMany();
-    await prisma.offer.updateMany({ data: { imageId: null } });
-    await prisma.offerImage.deleteMany();
-    await prisma.offer.deleteMany();
-    await prisma.creatorProfile.deleteMany();
-    await prisma.brandProfile.deleteMany();
-    await prisma.user.deleteMany();
+    await resetTestDatabase(prisma);
 
     await request(app.getHttpServer()).post('/api/auth/register').send(user).expect(201);
     await request(app.getHttpServer()).post('/api/auth/register').send(admin).expect(201);

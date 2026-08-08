@@ -11,6 +11,8 @@ import { StorageModule } from './storage/storage.module';
 import { AuditModule } from './audit/audit.module';
 import { SecurityModule } from './common/security.module';
 import { HealthModule } from './health/health.module';
+import { CommercialTermsModule } from './commercial-terms/commercial-terms.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -50,6 +52,8 @@ import { HealthModule } from './health/health.module';
     SecurityModule,
     StorageModule,
     HealthModule,
+    CommercialTermsModule,
+    NotificationsModule,
     AuthModule,
     CreatorKitModule,
     ProfilesModule,

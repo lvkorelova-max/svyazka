@@ -15,11 +15,13 @@ import {
 import { randomUUID } from 'crypto';
 import { extname } from 'path';
 import { AuditService } from '../audit/audit.service';
+import { CommercialTermsService } from '../commercial-terms/commercial-terms.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { S3StorageService } from '../storage/storage.service';
 import { CreateOfferDto } from './dto/create-offer.dto';
 import { InitOfferImageUploadDto } from './dto/init-offer-image-upload.dto';
 import { UpdateOfferDto } from './dto/update-offer.dto';
+import { UpdateCommercialTermsDto } from './dto/update-commercial-terms.dto';
 
 const ALLOWED_TRANSITIONS: Record<string, OfferStatus[]> = {
   [OfferStatus.DRAFT]: [OfferStatus.PUBLISHED, OfferStatus.ARCHIVED],
@@ -32,6 +34,9 @@ const ALLOWED_TRANSITIONS: Record<string, OfferStatus[]> = {
 const OFFER_INCLUDE = {
   brand: true,
   image: true,
+  currentVersion: true,
+  currentCommercialTerms: true,
+  creatorKit: { select: { activeRevisionId: true } },
 } satisfies Prisma.OfferInclude;
 
 type OfferWithImage = Prisma.OfferGetPayload<{ include: typeof OFFER_INCLUDE }>;
@@ -52,10 +57,25 @@ export class OffersService {
     private readonly config: ConfigService,
     private readonly audit: AuditService,
     private readonly storage: S3StorageService,
+    private readonly commercialTerms: CommercialTermsService,
   ) {}
 
   async create(userId: string, dto: CreateOfferDto) {
     const brand = await this.getBrandByUserId(userId);
+    if (
+      dto.creatorCommissionBps === undefined &&
+      dto.totalCommissionPoolBps === undefined
+    ) {
+      throw new BadRequestException('Укажите общий commission pool');
+    }
+    if (
+      dto.creatorCommissionBps !== undefined &&
+      dto.totalCommissionPoolBps !== undefined
+    ) {
+      throw new BadRequestException(
+        'Нельзя одновременно передать legacy creator rate и общий commission pool',
+      );
+    }
     const platformCommissionBps = Number(
       this.config.get<string>('PLATFORM_COMMISSION_BPS') ?? 500,
     );
@@ -66,15 +86,43 @@ export class OffersService {
     ) {
       throw new Error('PLATFORM_COMMISSION_BPS must be an integer from 0 to 10000');
     }
-    const offer = await this.prisma.offer.create({
-      data: {
-        ...dto,
-        brandId: brand.id,
-        platformCommissionBps,
-        status: OfferStatus.DRAFT,
+    const {
+      totalCommissionPoolBps,
+      creatorCommissionBps: legacyCreatorCommissionBps,
+      ...content
+    } = dto;
+    const creatorCommissionBps =
+      totalCommissionPoolBps === undefined
+        ? legacyCreatorCommissionBps!
+        : Number((BigInt(totalCommissionPoolBps) * 6_500n + 5_000n) / 10_000n);
+    const effectivePlatformBps =
+      totalCommissionPoolBps === undefined
+        ? platformCommissionBps
+        : totalCommissionPoolBps - creatorCommissionBps;
+    const offer = await this.prisma.$transaction(
+      async (tx) => {
+        const created = await tx.offer.create({
+          data: {
+            ...content,
+            brandId: brand.id,
+            creatorCommissionBps,
+            platformCommissionBps: effectivePlatformBps,
+            status: OfferStatus.DRAFT,
+          },
+          include: { creatorKit: { select: { activeRevisionId: true } } },
+        });
+        await this.commercialTerms.createInitialVersions(tx, created, userId, {
+          totalCommissionPoolBps,
+          legacyCreatorBps: legacyCreatorCommissionBps,
+          legacyPlatformBps: effectivePlatformBps,
+        });
+        return tx.offer.findUniqueOrThrow({
+          where: { id: created.id },
+          include: OFFER_INCLUDE,
+        });
       },
-      include: OFFER_INCLUDE,
-    });
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
     return this.presentOffer(offer);
   }
 
@@ -97,27 +145,67 @@ export class OffersService {
     if (offer.status === OfferStatus.ARCHIVED) {
       throw new BadRequestException('Архивированный оффер нельзя редактировать');
     }
-    const updated = await this.prisma.offer.update({
-      where: { id: offer.id },
-      data: dto,
-      include: OFFER_INCLUDE,
-    });
     if (
+      dto.creatorCommissionBps !== undefined &&
+      dto.totalCommissionPoolBps !== undefined
+    ) {
+      throw new BadRequestException(
+        'Нельзя одновременно изменить legacy creator rate и общий commission pool',
+      );
+    }
+    if (dto.totalCommissionPoolBps !== undefined) {
+      await this.commercialTerms.updatePoolTerms(userId, offer.id, {
+        totalCommissionPoolBps: dto.totalCommissionPoolBps,
+      });
+    } else if (
       dto.creatorCommissionBps !== undefined &&
       dto.creatorCommissionBps !== offer.creatorCommissionBps
     ) {
-      await this.audit.record({
-        actorUserId: userId,
-        action: 'OFFER_COMMISSION_RATE_CHANGED',
-        entityType: 'Offer',
-        entityId: offer.id,
-        metadata: {
-          previousCreatorCommissionBps: offer.creatorCommissionBps,
-          nextCreatorCommissionBps: dto.creatorCommissionBps,
-        },
-      });
+      await this.commercialTerms.updateLegacyTerms(
+        userId,
+        offer.id,
+        dto.creatorCommissionBps,
+      );
     }
+    const {
+      totalCommissionPoolBps: _totalCommissionPoolBps,
+      creatorCommissionBps: _creatorCommissionBps,
+      ...contentUpdate
+    } = dto;
+    const updated =
+      Object.keys(contentUpdate).length > 0
+        ? await this.prisma.$transaction(
+            async (tx) => {
+              const changed = await tx.offer.update({
+                where: { id: offer.id },
+                data: contentUpdate,
+                include: OFFER_INCLUDE,
+              });
+              const nextVersion = await this.commercialTerms.createOfferVersion(
+                tx,
+                changed,
+                userId,
+              );
+              return tx.offer.update({
+                where: { id: changed.id },
+                data: { currentOfferVersionId: nextVersion.id },
+                include: OFFER_INCLUDE,
+              });
+            },
+            { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+          )
+        : await this.getOwnedOffer(userId, offerId);
     return this.presentOffer(updated);
+  }
+
+  async updateCommercialTerms(
+    userId: string,
+    offerId: string,
+    dto: UpdateCommercialTermsDto,
+  ) {
+    await this.getOwnedOffer(userId, offerId);
+    await this.commercialTerms.updatePoolTerms(userId, offerId, dto);
+    return this.presentOffer(await this.getOwnedOffer(userId, offerId));
   }
 
   async initImageUpload(
@@ -223,7 +311,17 @@ export class OffersService {
             data: { imageId: image.id, imageUrl: null },
             include: OFFER_INCLUDE,
           });
-          return { updated, previousImage };
+          const nextVersion = await this.commercialTerms.createOfferVersion(
+            tx,
+            updated,
+            userId,
+          );
+          const versioned = await tx.offer.update({
+            where: { id: offer.id },
+            data: { currentOfferVersionId: nextVersion.id },
+            include: OFFER_INCLUDE,
+          });
+          return { updated: versioned, previousImage };
         },
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
       );
@@ -267,10 +365,22 @@ export class OffersService {
     if (!ALLOWED_TRANSITIONS[offer.status].includes(target)) {
       throw new BadRequestException(`Переход ${offer.status} → ${target} недоступен`);
     }
-    const updated = await this.prisma.offer.update({
-      where: { id: offer.id },
-      data: { status: target },
-      include: OFFER_INCLUDE,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const changed = await tx.offer.update({
+        where: { id: offer.id },
+        data: { status: target },
+        include: OFFER_INCLUDE,
+      });
+      const nextVersion = await this.commercialTerms.createOfferVersion(
+        tx,
+        changed,
+        userId,
+      );
+      return tx.offer.update({
+        where: { id: offer.id },
+        data: { currentOfferVersionId: nextVersion.id },
+        include: OFFER_INCLUDE,
+      });
     });
     await this.audit.record({
       actorUserId: userId,
@@ -288,7 +398,7 @@ export class OffersService {
       include: OFFER_INCLUDE,
       orderBy: { createdAt: 'desc' },
     });
-    return Promise.all(offers.map((offer) => this.presentOffer(offer)));
+    return Promise.all(offers.map((offer) => this.presentOffer(offer, 'creator')));
   }
 
   async getPublished(offerId: string) {
@@ -297,7 +407,7 @@ export class OffersService {
       include: OFFER_INCLUDE,
     });
     if (!offer) throw new NotFoundException('Опубликованный оффер не найден');
-    return this.presentOffer(offer);
+    return this.presentOffer(offer, 'creator');
   }
 
   private async getOwnedOffer(userId: string, offerId: string) {
@@ -338,13 +448,46 @@ export class OffersService {
     return { extension, maxBytes: OFFER_IMAGE_MAX_BYTES };
   }
 
-  private async presentOffer(offer: OfferWithImage) {
-    const { image, ...safe } = offer;
+  private async presentOffer(
+    offer: OfferWithImage,
+    audience: 'brand' | 'creator' = 'brand',
+  ) {
+    const {
+      image,
+      currentVersion,
+      currentCommercialTerms,
+      platformCommissionBps: legacyPlatformCommissionBps,
+      ...safe
+    } = offer;
     const imageUrl =
       image?.status === OfferImageStatus.READY
         ? await this.storage.createViewUrl(image.storageObjectKey, image.mimeType)
         : safe.imageUrl;
-    return { ...safe, imageUrl };
+    const creatorEffectiveBps =
+      currentCommercialTerms?.creatorEffectiveGmvBps ?? safe.creatorCommissionBps;
+    const common = {
+      ...safe,
+      creatorCommissionBps: creatorEffectiveBps,
+      creatorEffectiveBps,
+      offerVersion: currentVersion?.version ?? null,
+      commercialTermsVersion: currentCommercialTerms?.version ?? null,
+      calculationPolicy:
+        currentCommercialTerms?.calculationPolicy ?? 'LEGACY_DIRECT_RATES_V1',
+      currency: currentCommercialTerms?.currency ?? 'RUB',
+      imageUrl,
+    };
+    if (audience === 'creator') return common;
+    return {
+      ...common,
+      totalCommissionPoolBps:
+        currentCommercialTerms?.totalCommissionPoolBps ??
+        safe.creatorCommissionBps + legacyPlatformCommissionBps,
+      creatorPoolShareBps: currentCommercialTerms?.creatorPoolShareBps ?? 0,
+      platformPoolShareBps: currentCommercialTerms?.platformPoolShareBps ?? 0,
+      platformEffectiveBps:
+        currentCommercialTerms?.platformEffectiveGmvBps ??
+        legacyPlatformCommissionBps,
+    };
   }
 
   private publicImage<T extends { storageObjectKey: string }>(image: T) {
