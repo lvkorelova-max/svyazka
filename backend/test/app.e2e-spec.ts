@@ -594,6 +594,20 @@ describe('Stage 1 end-to-end', () => {
       .expect(201);
     expect(completed.body.status).toBe('READY');
 
+    const brandKit = await owner.agent
+      .get(`/api/brand/offers/${created.body.id}/creator-kit`)
+      .set(authHeader(owner.token))
+      .expect(200);
+    const brandAsset = brandKit.body.assets.find(
+      (asset: { id: string }) => asset.id === upload.body.asset.id,
+    );
+    expect(brandAsset.previewUrl).toMatch(/^https?:\/\//);
+    expect(brandAsset.storageObjectKey).toBeUndefined();
+    const brandPreviewResponse = await fetch(brandAsset.previewUrl);
+    expect(brandPreviewResponse.ok).toBe(true);
+    expect(brandPreviewResponse.headers.get('content-type')).toContain('image/png');
+    expect(Buffer.from(await brandPreviewResponse.arrayBuffer())).toEqual(file);
+
     await owner.agent
       .post(`/api/brand/offers/${created.body.id}/creator-kit/publish`)
       .set(authHeader(owner.token))
@@ -611,6 +625,11 @@ describe('Stage 1 end-to-end', () => {
     expect(kit.body.assets.map((asset: { id: string }) => asset.id)).toContain(
       upload.body.asset.id,
     );
+    const creatorAsset = kit.body.assets.find(
+      (asset: { id: string }) => asset.id === upload.body.asset.id,
+    );
+    expect(creatorAsset.previewUrl).toMatch(/^https?:\/\//);
+    expect(creatorAsset.storageObjectKey).toBeUndefined();
 
     await owner.agent
       .post(

@@ -164,7 +164,8 @@ function mapCreatorKit(kit, offer) {
       expires: asset.expiresAt ? new Date(asset.expiresAt).toLocaleDateString("ru-RU") : "Без срока",
       active: asset.status === "READY",
       status: asset.status,
-      originalFileName: asset.originalFileName
+      originalFileName: asset.originalFileName,
+      previewUrl: asset.previewUrl || ""
     })),
     scenarios,
     facts,
@@ -626,6 +627,23 @@ function PermissionValue({ value }) {
   return <span className={`permission-value ${value ? "yes" : "no"}`}>{value ? "Разрешено" : "Нет"}</span>;
 }
 
+function AssetPreview({ asset }) {
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [asset.previewUrl]);
+
+  const label = asset.type.slice(0, 2).toUpperCase();
+  return (
+    <span className={`asset-preview ${asset.previewUrl && !failed ? "has-image" : ""}`}>
+      {asset.previewUrl && !failed
+        ? <img src={asset.previewUrl} alt={`Превью: ${asset.name}`} loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => setFailed(true)} />
+        : label}
+    </span>
+  );
+}
+
 function CreatorKit({ offer, mode = "creator", hasProductAccess = false, notify, onToggleAsset, onDownloadAsset }) {
   const kit = offer.creatorKit || mapCreatorKit(null, offer);
   const [selectedAssets, setSelectedAssets] = useState(kit.assets.filter((asset) => asset.active).slice(0, 2).map((asset) => asset.id));
@@ -715,10 +733,10 @@ function CreatorKit({ offer, mode = "creator", hasProductAccess = false, notify,
                 {mode === "creator" ? (
                   <label className="asset-select">
                     <input type="checkbox" checked={selectedAssets.includes(asset.id)} disabled={!asset.active} onChange={() => toggleSelected(asset.id)} />
-                    <span className="asset-preview">{asset.type.slice(0, 2).toUpperCase()}</span>
+                    <AssetPreview asset={asset} />
                   </label>
                 ) : (
-                  <span className="asset-preview">{asset.type.slice(0, 2).toUpperCase()}</span>
+                  <AssetPreview asset={asset} />
                 )}
                 <div className="asset-main">
                   <strong>{asset.name}</strong>

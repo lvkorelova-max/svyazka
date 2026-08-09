@@ -1180,6 +1180,7 @@ export class CreatorKitService {
   private async presentFilteredSnapshot(
     snapshot: CreatorKitSnapshot,
     offer: {
+      id: string;
       promotionWithoutProduct: PromotionWithoutProduct;
       allowedPromotionFormats: string[];
     },
@@ -1187,8 +1188,9 @@ export class CreatorKitService {
     context: Record<string, unknown>,
   ) {
     const filtered = await this.filterSnapshot(snapshot, offer, access);
+    const presented = await this.withAssetPreviewUrls(filtered, offer.id);
     return {
-      ...filtered,
+      ...presented,
       offerPolicy: {
         promotionWithoutProduct: offer.promotionWithoutProduct,
         allowedPromotionFormats: offer.allowedPromotionFormats,
@@ -1206,14 +1208,16 @@ export class CreatorKitService {
   private async presentRevision(
     revision: RevisionWithContent,
     offer: {
+      id: string;
       promotionWithoutProduct: PromotionWithoutProduct;
       allowedPromotionFormats: string[];
     },
     filtered: boolean,
   ) {
     const snapshot = this.snapshotFromJson(revision.snapshot) ?? this.buildSnapshot(revision);
+    const presented = await this.withAssetPreviewUrls(snapshot, offer.id);
     return {
-      ...snapshot,
+      ...presented,
       offerPolicy: {
         promotionWithoutProduct: offer.promotionWithoutProduct,
         allowedPromotionFormats: offer.allowedPromotionFormats,
@@ -1221,6 +1225,49 @@ export class CreatorKitService {
       completeness: this.completeness(snapshot, offer),
       revision: this.revisionMeta(revision),
       filtered,
+    };
+  }
+
+  private async withAssetPreviewUrls(
+    snapshot: CreatorKitSnapshot,
+    offerId: string,
+  ): Promise<CreatorKitSnapshot> {
+    const assetIds = snapshot.assets
+      .map((item) => String(item.assetId ?? item.id ?? ''))
+      .filter(Boolean);
+    if (!assetIds.length) return snapshot;
+
+    const assets = await this.prisma.creatorKitAsset.findMany({
+      where: {
+        id: { in: assetIds },
+        status: {
+          in: [CreatorKitAssetStatus.READY, CreatorKitAssetStatus.DISABLED],
+        },
+        mimeType: { startsWith: 'image/' },
+        creatorKit: { offerId },
+      },
+      select: {
+        id: true,
+        storageObjectKey: true,
+        mimeType: true,
+      },
+    });
+    const previewUrls = new Map(
+      await Promise.all(
+        assets.map(async (asset) => [
+          asset.id,
+          await this.storage.createViewUrl(asset.storageObjectKey, asset.mimeType),
+        ] as const),
+      ),
+    );
+
+    return {
+      ...snapshot,
+      assets: snapshot.assets.map((item) => {
+        const id = String(item.assetId ?? item.id ?? '');
+        const previewUrl = previewUrls.get(id);
+        return previewUrl ? { ...item, previewUrl } : item;
+      }),
     };
   }
 
