@@ -23,6 +23,11 @@ import {
   calculatePoolEconomics,
   getApplicationUiState
 } from "./financeEconomics.mjs";
+import {
+  countActiveApplications,
+  getAdminApplicationStatus,
+  getAdminCreatorStatus
+} from "./adminDirectory.mjs";
 
 const productImages = {
   skincare: "https://images.unsplash.com/photo-1556228578-8c89e6adf883?auto=format&fit=crop&w=1200&q=85",
@@ -2756,7 +2761,7 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAll
   );
 }
 
-function AdminDashboard({ user, offers, brands, operationalReadiness, finance, createPayout, approvePayout, markPayoutPaid, cancelPayout, issueStatement, recordBrandPayment, resolveDispute, runReconciliation, verifyBrand, changeAdminPassword, beginAdminMfa, confirmAdminMfa }) {
+function AdminDashboard({ user, offers, brands, creators, applications, operationalReadiness, finance, createPayout, approvePayout, markPayoutPaid, cancelPayout, issueStatement, recordBrandPayment, resolveDispute, runReconciliation, verifyBrand, changeAdminPassword, beginAdminMfa, confirmAdminMfa }) {
   const [tab, setTab] = useState("offers");
   const [securityForm, setSecurityForm] = useState({ currentPassword: "", newPassword: "", code: "" });
   const [mfaEnrollment, setMfaEnrollment] = useState(null);
@@ -2827,11 +2832,11 @@ function AdminDashboard({ user, offers, brands, operationalReadiness, finance, c
       setActive={setTab}
     >
       <div className="dashboard-header">
-        <div><h1>Админ-панель</h1><p>Обзор тестовых данных и статусов платформы.</p></div>
+        <div><h1>Админ-панель</h1><p>Обзор данных и статусов закрытого пилота.</p></div>
       </div>
       <div className="creator-warning compact-warning">
         <span className="warning-mark">!</span>
-        <strong>Выплаты и финансовый ledger подключены к серверу. Офферы, бренды, креаторы и заявки в этой панели остаются демонстрационными.</strong>
+        <strong>Бренды, креаторы, заявки и финансы подключены к серверу. Список офферов в ADMIN пока остаётся демонстрационным.</strong>
       </div>
       <div className="creator-warning compact-warning">
         <span className="warning-mark">!</span>
@@ -2845,9 +2850,9 @@ function AdminDashboard({ user, offers, brands, operationalReadiness, finance, c
       )}
       <div className="stats-grid">
         <div className="stat-card"><span className="stat-label">Бренды</span><span className="stat-value">{finance.overview?.brandCount || 0}</span><span className="stat-note">в финансовом контуре</span></div>
-        <div className="stat-card"><span className="stat-label">Креаторы</span><span className="stat-value">{finance.overview?.creatorCount || 0}</span><span className="stat-note">в финансовом контуре</span></div>
+        <div className="stat-card"><span className="stat-label">Креаторы</span><span className="stat-value">{creators.length}</span><span className="stat-note">зарегистрировано</span></div>
         <div className="stat-card"><span className="stat-label">Офферы</span><span className="stat-value">{offers.length}</span><span className="stat-note">{offers.filter((item) => item.status === "review").length} на проверке</span></div>
-        <div className="stat-card"><span className="stat-label">Активные заявки</span><span className="stat-value">37</span><span className="stat-note">на рассмотрении</span></div>
+        <div className="stat-card"><span className="stat-label">Активные заявки</span><span className="stat-value">{countActiveApplications(applications)}</span><span className="stat-note">требуют обработки</span></div>
       </div>
 
       {tab === "offers" && (
@@ -2886,15 +2891,53 @@ function AdminDashboard({ user, offers, brands, operationalReadiness, finance, c
 
       {tab === "creators" && (
         <div className="panel">
-          <div className="panel-header"><h2>Креаторы</h2></div>
-          <div className="table-wrap"><table className="data-table"><thead><tr><th>Креатор</th><th>Тематика</th><th>Активные офферы</th><th>Статус</th></tr></thead><tbody><tr><td><strong>Анна Лебедева</strong></td><td>Красота и уход</td><td>2</td><td><Status type="success">Активен</Status></td></tr><tr><td><strong>Мария Фролова</strong></td><td>Образ жизни</td><td>3</td><td><Status type="success">Активен</Status></td></tr><tr><td><strong>Елена Петрова</strong></td><td>Мода</td><td>1</td><td><Status type="success">Активен</Status></td></tr></tbody></table></div>
+          <div className="panel-header"><h2>Креаторы</h2><Status type="success">{creators.length} зарегистрировано</Status></div>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Креатор</th><th>О профиле</th><th>Заявки</th><th>Активные офферы</th><th>Статус</th></tr></thead>
+              <tbody>
+                {creators.map((creator) => {
+                  const creatorStatus = getAdminCreatorStatus(creator);
+                  return (
+                    <tr key={creator.id}>
+                      <td><strong>{creator.displayName}</strong></td>
+                      <td>{creator.description || "Не указано"}</td>
+                      <td>{creator._count?.applications || 0}</td>
+                      <td>{creator._count?.affiliateRelationships || 0}</td>
+                      <td><Status type={creatorStatus.type}>{creatorStatus.label}</Status></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {!creators.length && <div className="empty-state">Зарегистрированных креаторов пока нет.</div>}
         </div>
       )}
 
       {tab === "applications" && (
         <div className="panel">
-          <div className="panel-header"><h2>Заявки</h2><Status type="pending">37 активных</Status></div>
-          <div className="table-wrap"><table className="data-table"><thead><tr><th>Креатор</th><th>Бренд</th><th>Оффер</th><th>Статус</th></tr></thead><tbody><tr><td>Анна Лебедева</td><td>LUNEA</td><td>{offers[0].title}</td><td><Status type="success">Одобрена</Status></td></tr><tr><td>Мария Фролова</td><td>SEVER</td><td>{offers[2].title}</td><td><Status type="pending">На рассмотрении</Status></td></tr><tr><td>Елена Петрова</td><td>FORMA</td><td>{offers[1].title}</td><td><Status type="pending">На рассмотрении</Status></td></tr></tbody></table></div>
+          <div className="panel-header"><h2>Заявки</h2><Status type="pending">{countActiveApplications(applications)} активных</Status></div>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Креатор</th><th>Бренд</th><th>Оффер</th><th>Дата</th><th>Статус</th></tr></thead>
+              <tbody>
+                {applications.map((application) => {
+                  const applicationStatus = getAdminApplicationStatus(application);
+                  return (
+                    <tr key={application.id}>
+                      <td>{application.creator.displayName}</td>
+                      <td>{application.offer.brand.brandName}</td>
+                      <td>{application.offer.title}</td>
+                      <td>{new Date(application.createdAt).toLocaleDateString("ru-RU")}</td>
+                      <td><Status type={applicationStatus.type}>{applicationStatus.label}</Status></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {!applications.length && <div className="empty-state">Заявок от креаторов пока нет.</div>}
         </div>
       )}
       {tab === "finance" && (
@@ -3099,6 +3142,8 @@ function App() {
   const [brandFinance, setBrandFinance] = useState({ orders: { items: [] }, commissions: { items: [] }, analytics: {}, creatorAnalytics: { items: [] }, overview: {}, statements: [] });
   const [adminFinance, setAdminFinance] = useState({ commissions: { items: [] }, payouts: { items: [] }, ledger: { items: [] }, overview: {}, statements: [], payments: [], disputes: [] });
   const [adminBrands, setAdminBrands] = useState([]);
+  const [adminCreators, setAdminCreators] = useState([]);
+  const [adminApplications, setAdminApplications] = useState([]);
   const [operationalReadiness, setOperationalReadiness] = useState(null);
   const [orderImportPreview, setOrderImportPreview] = useState(null);
   const [toast, setToast] = useState("");
@@ -3147,11 +3192,13 @@ function App() {
       setCreatorFinance({ clicks: clicksData, orders: ordersData, commissions: commissionsData, payouts: payoutsData, summary: summaryData });
       setCreatorNotifications({ items: notificationsData, counts: notificationCounts });
     } else if (currentRole === "admin") {
-      const [commissionsData, payoutsData, ledgerData, brandsData, readinessData, overviewData, statementsData, paymentsData, disputesData] = await Promise.all([
+      const [commissionsData, payoutsData, ledgerData, brandsData, creatorsData, applicationsData, readinessData, overviewData, statementsData, paymentsData, disputesData] = await Promise.all([
         api("/admin/commissions?pageSize=100"),
         api("/admin/payouts?pageSize=100"),
         api("/admin/ledger-transactions?pageSize=100"),
         api("/admin/brands"),
+        api("/admin/creators"),
+        api("/admin/applications"),
         api("/admin/operations/readiness"),
         api("/admin/finance/overview"),
         api("/admin/statements"),
@@ -3160,6 +3207,8 @@ function App() {
       ]);
       setAdminFinance({ commissions: commissionsData, payouts: payoutsData, ledger: ledgerData, overview: overviewData, statements: statementsData, payments: paymentsData, disputes: disputesData });
       setAdminBrands(brandsData);
+      setAdminCreators(creatorsData);
+      setAdminApplications(applicationsData);
       setOperationalReadiness(readinessData);
     }
   };
@@ -3238,6 +3287,8 @@ function App() {
       } catch {
         setAdminFinance({ commissions: { items: [] }, payouts: { items: [] }, ledger: { items: [] }, overview: {}, statements: [], payments: [], disputes: [] });
         setAdminBrands([]);
+        setAdminCreators([]);
+        setAdminApplications([]);
         setOperationalReadiness(null);
       }
     } else {
@@ -3373,6 +3424,9 @@ function App() {
     setCreatorNotifications({ items: [], counts: { unread: 0, actionRequired: 0 } });
     setBrandFinance({ orders: { items: [] }, commissions: { items: [] }, analytics: {}, creatorAnalytics: { items: [] }, overview: {}, statements: [] });
     setAdminFinance({ commissions: { items: [] }, payouts: { items: [] }, ledger: { items: [] }, overview: {}, statements: [], payments: [], disputes: [] });
+    setAdminBrands([]);
+    setAdminCreators([]);
+    setAdminApplications([]);
     setOrderImportPreview(null);
     navigate("home");
   };
@@ -3801,7 +3855,7 @@ function App() {
       {page === "creator" && role === "creator" && <CreatorDashboard user={user} applications={applications} relationships={relationships} offers={offers} finance={creatorFinance} notifications={creatorNotifications} acceptTerms={acceptApplicationTerms} withdrawApplication={withdrawApplication} copyValue={copyValue} navigate={navigate} />}
       {page === "brand" && role === "brand" && <BrandDashboard user={user} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} initialTab={brandDashboardTarget.tab} initialCreatorKitOfferId={brandDashboardTarget.creatorKitOfferId} initialCreatorKitFocus={brandDashboardTarget.creatorKitFocus} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onReload={() => loadOffers("brand")} transitionOffer={transitionOffer} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} />}
       {page === "create" && role === "brand" && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} brandName={user?.profile?.brandName} uploadAllowed={user?.profile?.verificationStatus === "VERIFIED"} />}
-      {page === "admin" && role === "admin" && <AdminDashboard user={user} offers={offers} brands={adminBrands} operationalReadiness={operationalReadiness} finance={adminFinance} createPayout={createPayout} approvePayout={approvePayout} markPayoutPaid={markPayoutPaid} cancelPayout={cancelPayout} issueStatement={issueStatement} recordBrandPayment={recordBrandPayment} resolveDispute={resolveDispute} runReconciliation={runReconciliation} verifyBrand={verifyBrand} changeAdminPassword={changeAdminPassword} beginAdminMfa={beginAdminMfa} confirmAdminMfa={confirmAdminMfa} />}
+      {page === "admin" && role === "admin" && <AdminDashboard user={user} offers={offers} brands={adminBrands} creators={adminCreators} applications={adminApplications} operationalReadiness={operationalReadiness} finance={adminFinance} createPayout={createPayout} approvePayout={approvePayout} markPayoutPaid={markPayoutPaid} cancelPayout={cancelPayout} issueStatement={issueStatement} recordBrandPayment={recordBrandPayment} resolveDispute={resolveDispute} runReconciliation={runReconciliation} verifyBrand={verifyBrand} changeAdminPassword={changeAdminPassword} beginAdminMfa={beginAdminMfa} confirmAdminMfa={confirmAdminMfa} />}
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
   );
