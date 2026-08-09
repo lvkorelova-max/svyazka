@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  deploy-release COMMIT_SHA CHANGE_SLUG SERVICE...
+
+Allowed services:
+  backend frontend caddy backup-service
+
+Example:
+  deploy-release 0123456789abcdef0123456789abcdef01234567 admin-directory backend frontend
+EOF
+  exit 2
+}
+
+[[ "$#" -ge 3 ]] || usage
+
+commit_sha="$1"
+change_slug="$2"
+shift 2
+services=("$@")
+
+[[ "$commit_sha" =~ ^[a-f0-9]{40}$ ]] || usage
+[[ "$change_slug" =~ ^[a-z0-9][a-z0-9-]{0,47}$ ]] || usage
+
+for service in "${services[@]}"; do
+  case "$service" in
+    backend|frontend|caddy|backup-service) ;;
+    *) usage ;;
+  esac
+done
+
+git cat-file -e "${commit_sha}^{commit}"
+[[ "$(git rev-parse "$commit_sha")" == "$commit_sha" ]] ||
+  { printf 'Commit SHA must be full and exact.\n' >&2; exit 1; }
+
+short_sha="${commit_sha:0:7}"
+release_name="${change_slug}-${short_sha}"
+archive_name="svyazka-${release_name}.tar.gz"
+archive_path="/tmp/${archive_name}"
+previous_commit="$(
+  ssh svyazka-production 'svyazka-deployctl preflight' |
+    awk -F= '$1 == "ACTIVE_COMMIT" { print $2 }'
+)"
+[[ "$previous_commit" =~ ^[a-f0-9]{40}$ ]] ||
+  { printf 'Could not determine the active production commit.\n' >&2; exit 1; }
+previous_short="${previous_commit:0:7}"
+
+cleanup_local() {
+  rm -f "$archive_path"
+}
+trap cleanup_local EXIT
+
+git archive --format=tar.gz --output="$archive_path" "$commit_sha"
+archive_sha="$(shasum -a 256 "$archive_path" | awk '{ print $1 }')"
+
+printf 'Commit: %s\n' "$commit_sha"
+printf 'Release: %s\n' "$release_name"
+printf 'Current production commit: %s\n' "$previous_commit"
+printf 'Services: %s\n' "${services[*]}"
+printf 'Archive SHA-256: %s\n' "$archive_sha"
+
+expected="DEPLOY ${short_sha}"
+if [[ "${SVYAZKA_DEPLOY_CONFIRM:-}" != "$expected" ]]; then
+  printf 'Type "%s" to continue: ' "$expected" >&2
+  read -r confirmation
+  [[ "$confirmation" == "$expected" ]] ||
+    { printf 'Deployment cancelled.\n' >&2; exit 1; }
+fi
+
+ssh svyazka-production 'svyazka-deployctl backup'
+ssh svyazka-production \
+  "svyazka-deployctl upload ${archive_name} ${archive_sha}" \
+  < "$archive_path"
+ssh svyazka-production \
+  "svyazka-deployctl prepare ${release_name} ${archive_name} ${commit_sha} ${archive_sha}"
+ssh svyazka-production \
+  "svyazka-deployctl validate ${release_name}"
+
+for service in "${services[@]}"; do
+  ssh svyazka-production \
+    "svyazka-deployctl preserve-image ${service} rollback-${previous_short}"
+done
+
+ssh svyazka-production \
+  "svyazka-deployctl build ${release_name} migration ${services[*]}"
+ssh svyazka-production \
+  "svyazka-deployctl migrate ${release_name}"
+ssh svyazka-production \
+  "svyazka-deployctl activate ${release_name} ${services[*]}"
+ssh svyazka-production \
+  "svyazka-deployctl cleanup-upload ${archive_name}"
+ssh svyazka-production 'svyazka-deployctl preflight'
+
+printf 'Release activated. Exact production smoke verification is still required.\n'
