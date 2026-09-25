@@ -1,21 +1,23 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { BrandAccessService } from '../brand-access/brand-access.service';
 import { UpdateBrandProfileDto } from './dto/update-brand-profile.dto';
 import { UpdateCreatorProfileDto } from './dto/update-creator-profile.dto';
 
 @Injectable()
 export class ProfilesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly brands: BrandAccessService,
+  ) {}
 
-  async getBrand(userId: string) {
-    const profile = await this.prisma.brandProfile.findUnique({ where: { userId } });
-    if (!profile) throw new NotFoundException('Профиль бренда не найден');
-    return profile;
+  async getBrand(userId: string, activeBrandId?: string) {
+    return this.brands.resolveBrand(userId, activeBrandId);
   }
 
-  async updateBrand(userId: string, dto: UpdateBrandProfileDto) {
-    await this.getBrand(userId);
-    return this.prisma.brandProfile.update({ where: { userId }, data: dto });
+  async updateBrand(userId: string, dto: UpdateBrandProfileDto, activeBrandId?: string) {
+    const profile = await this.getBrand(userId, activeBrandId);
+    return this.prisma.brandProfile.update({ where: { id: profile.id }, data: dto });
   }
 
   async getCreator(userId: string) {

@@ -7,6 +7,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { OfferStatus } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
+import { BrandAccessService } from '../brand-access/brand-access.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateOfferDto } from './dto/create-offer.dto';
 import { UpdateOfferDto } from './dto/update-offer.dto';
@@ -25,10 +26,11 @@ export class OffersService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly audit: AuditService,
+    private readonly brands: BrandAccessService,
   ) {}
 
-  async create(userId: string, dto: CreateOfferDto) {
-    const brand = await this.getBrandByUserId(userId);
+  async create(userId: string, dto: CreateOfferDto, activeBrandId?: string) {
+    const brand = await this.brands.resolveBrand(userId, activeBrandId);
     const platformCommissionBps = Number(
       this.config.get<string>('PLATFORM_COMMISSION_BPS') ?? 500,
     );
@@ -50,8 +52,8 @@ export class OffersService {
     });
   }
 
-  async listOwn(userId: string) {
-    const brand = await this.getBrandByUserId(userId);
+  async listOwn(userId: string, activeBrandId?: string) {
+    const brand = await this.brands.resolveBrand(userId, activeBrandId);
     return this.prisma.offer.findMany({
       where: { brandId: brand.id },
       include: { brand: true },
@@ -59,8 +61,8 @@ export class OffersService {
     });
   }
 
-  async getOwn(userId: string, offerId: string) {
-    const brand = await this.getBrandByUserId(userId);
+  async getOwn(userId: string, offerId: string, activeBrandId?: string) {
+    const brand = await this.brands.resolveBrand(userId, activeBrandId);
     const offer = await this.prisma.offer.findUnique({
       where: { id: offerId },
       include: { brand: true },
@@ -70,8 +72,8 @@ export class OffersService {
     return offer;
   }
 
-  async updateOwn(userId: string, offerId: string, dto: UpdateOfferDto) {
-    const offer = await this.getOwn(userId, offerId);
+  async updateOwn(userId: string, offerId: string, dto: UpdateOfferDto, activeBrandId?: string) {
+    const offer = await this.getOwn(userId, offerId, activeBrandId);
     if (offer.status === OfferStatus.ARCHIVED) {
       throw new BadRequestException('Архивированный оффер нельзя редактировать');
     }
@@ -98,8 +100,8 @@ export class OffersService {
     return updated;
   }
 
-  async transition(userId: string, offerId: string, target: OfferStatus) {
-    const offer = await this.getOwn(userId, offerId);
+  async transition(userId: string, offerId: string, target: OfferStatus, activeBrandId?: string) {
+    const offer = await this.getOwn(userId, offerId, activeBrandId);
     if (!ALLOWED_TRANSITIONS[offer.status].includes(target)) {
       throw new BadRequestException(`Переход ${offer.status} → ${target} недоступен`);
     }
@@ -133,11 +135,5 @@ export class OffersService {
     });
     if (!offer) throw new NotFoundException('Опубликованный оффер не найден');
     return offer;
-  }
-
-  private async getBrandByUserId(userId: string) {
-    const brand = await this.prisma.brandProfile.findUnique({ where: { userId } });
-    if (!brand) throw new ForbiddenException('Профиль бренда не найден');
-    return brand;
   }
 }

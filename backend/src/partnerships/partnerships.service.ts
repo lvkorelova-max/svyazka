@@ -16,6 +16,7 @@ import {
 import { createHmac, randomBytes, randomInt, randomUUID } from 'crypto';
 import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { BrandAccessService } from '../brand-access/brand-access.service';
 import { CreateApplicationDto } from './dto/create-application.dto';
 
 const PUBLIC_BRAND_SELECT = {
@@ -72,6 +73,7 @@ export class PartnershipsService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly audit: AuditService,
+    private readonly brands: BrandAccessService,
   ) {}
 
   async createApplication(userId: string, offerId: string, dto: CreateApplicationDto) {
@@ -141,8 +143,8 @@ export class PartnershipsService {
     });
   }
 
-  async listBrandApplications(userId: string, offerId: string) {
-    const brand = await this.getBrand(userId);
+  async listBrandApplications(userId: string, offerId: string, activeBrandId?: string) {
+    const brand = await this.getBrand(userId, activeBrandId);
     await this.assertOwnedOffer(brand.id, offerId);
     return this.prisma.offerApplication.findMany({
       where: { offerId },
@@ -151,8 +153,8 @@ export class PartnershipsService {
     });
   }
 
-  async getBrandApplication(userId: string, applicationId: string) {
-    const brand = await this.getBrand(userId);
+  async getBrandApplication(userId: string, applicationId: string, activeBrandId?: string) {
+    const brand = await this.getBrand(userId, activeBrandId);
     const application = await this.prisma.offerApplication.findUnique({
       where: { id: applicationId },
       include: APPLICATION_INCLUDE,
@@ -164,15 +166,14 @@ export class PartnershipsService {
     return application;
   }
 
-  async approveApplication(userId: string, applicationId: string) {
+  async approveApplication(userId: string, applicationId: string, activeBrandId?: string) {
+    const brand = await this.getBrand(userId, activeBrandId);
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const affiliateCode = randomBytes(24).toString('base64url');
       const promoCode = this.generatePromoCode();
       try {
         const result = await this.prisma.$transaction(
           async (tx) => {
-            const brand = await tx.brandProfile.findUnique({ where: { userId } });
-            if (!brand) throw new ForbiddenException('Профиль бренда не найден');
             const application = await tx.offerApplication.findUnique({
               where: { id: applicationId },
               include: APPLICATION_INCLUDE,
@@ -249,8 +250,8 @@ export class PartnershipsService {
     throw new ConflictException('Не удалось создать уникальные партнёрские коды');
   }
 
-  async rejectApplication(userId: string, applicationId: string) {
-    const application = await this.getBrandApplication(userId, applicationId);
+  async rejectApplication(userId: string, applicationId: string, activeBrandId?: string) {
+    const application = await this.getBrandApplication(userId, applicationId, activeBrandId);
     if (application.status === OfferApplicationStatus.REJECTED) return application;
     if (application.status !== OfferApplicationStatus.PENDING) {
       throw new ConflictException('Заявку нельзя отклонить в текущем статусе');
@@ -286,8 +287,8 @@ export class PartnershipsService {
     return this.presentRelationship(relationship);
   }
 
-  async listBrandRelationships(userId: string, offerId?: string) {
-    const brand = await this.getBrand(userId);
+  async listBrandRelationships(userId: string, offerId?: string, activeBrandId?: string) {
+    const brand = await this.getBrand(userId, activeBrandId);
     if (offerId) await this.assertOwnedOffer(brand.id, offerId);
     const relationships = await this.prisma.affiliateRelationship.findMany({
       where: {
@@ -304,8 +305,9 @@ export class PartnershipsService {
     userId: string,
     relationshipId: string,
     target: AffiliateRelationshipStatus,
+    activeBrandId?: string,
   ) {
-    const brand = await this.getBrand(userId);
+    const brand = await this.getBrand(userId, activeBrandId);
     const relationship = await this.prisma.affiliateRelationship.findUnique({
       where: { id: relationshipId },
       include: RELATIONSHIP_INCLUDE,
@@ -481,10 +483,8 @@ export class PartnershipsService {
     return creator;
   }
 
-  private async getBrand(userId: string) {
-    const brand = await this.prisma.brandProfile.findUnique({ where: { userId } });
-    if (!brand) throw new ForbiddenException('Профиль бренда не найден');
-    return brand;
+  private async getBrand(userId: string, activeBrandId?: string) {
+    return this.brands.resolveBrand(userId, activeBrandId);
   }
 
   private async assertOwnedOffer(brandId: string, offerId: string) {

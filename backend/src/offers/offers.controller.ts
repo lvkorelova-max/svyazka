@@ -5,71 +5,78 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { AccessTokenGuard } from '../common/guards/access-token.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { BrandContextGuard } from '../brand-access/brand-context.guard';
+import { ActiveBrandId } from '../brand-access/brand-context';
 import { CreateOfferDto } from './dto/create-offer.dto';
 import { UpdateOfferDto } from './dto/update-offer.dto';
 import { OffersService } from './offers.service';
 
 @Controller()
-@UseGuards(AccessTokenGuard, RolesGuard)
+@UseGuards(AccessTokenGuard, RolesGuard, BrandContextGuard)
 export class OffersController {
   constructor(private readonly offers: OffersService) {}
 
   @Post('brand/offers')
-  @Roles(UserRole.BRAND)
-  create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateOfferDto) {
-    return this.offers.create(user.id, dto);
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
+  create(@CurrentUser() user: AuthenticatedUser, @ActiveBrandId() brandId: string, @Body() dto: CreateOfferDto) {
+    return this.offers.create(user.id, dto, brandId);
   }
 
   @Get('brand/offers')
-  @Roles(UserRole.BRAND)
-  listOwn(@CurrentUser() user: AuthenticatedUser) {
-    return this.offers.listOwn(user.id);
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
+  listOwn(@CurrentUser() user: AuthenticatedUser, @ActiveBrandId() brandId: string) {
+    return this.offers.listOwn(user.id, brandId);
   }
 
   @Get('brand/offers/:id')
-  @Roles(UserRole.BRAND)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   getOwn(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) offerId: string,
+    @ActiveBrandId() brandId: string,
   ) {
-    return this.offers.getOwn(user.id, offerId);
+    return this.offers.getOwn(user.id, offerId, brandId);
   }
 
   @Patch('brand/offers/:id')
-  @Roles(UserRole.BRAND)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   update(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) offerId: string,
     @Body() dto: UpdateOfferDto,
+    @ActiveBrandId() brandId: string,
   ) {
-    return this.offers.updateOwn(user.id, offerId, dto);
+    return this.offers.updateOwn(user.id, offerId, dto, brandId);
   }
 
   @Post('brand/offers/:id/publish')
-  @Roles(UserRole.BRAND)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   publish(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) offerId: string,
+    @ActiveBrandId() brandId: string,
   ) {
-    return this.offers.transition(user.id, offerId, OfferStatus.PUBLISHED);
+    return this.offers.transition(user.id, offerId, OfferStatus.PUBLISHED, brandId);
   }
 
   @Post('brand/offers/:id/pause')
-  @Roles(UserRole.BRAND)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   pause(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) offerId: string,
+    @ActiveBrandId() brandId: string,
   ) {
-    return this.offers.transition(user.id, offerId, OfferStatus.PAUSED);
+    return this.offers.transition(user.id, offerId, OfferStatus.PAUSED, brandId);
   }
 
   @Post('brand/offers/:id/archive')
-  @Roles(UserRole.BRAND)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   archive(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) offerId: string,
+    @ActiveBrandId() brandId: string,
   ) {
-    return this.offers.transition(user.id, offerId, OfferStatus.ARCHIVED);
+    return this.offers.transition(user.id, offerId, OfferStatus.ARCHIVED, brandId);
   }
 
   @Get('creator/offers')

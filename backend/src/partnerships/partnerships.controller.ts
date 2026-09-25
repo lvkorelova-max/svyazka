@@ -18,12 +18,14 @@ import { RateLimit } from '../common/decorators/rate-limit.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { AccessTokenGuard } from '../common/guards/access-token.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { BrandContextGuard } from '../brand-access/brand-context.guard';
+import { ActiveBrandId } from '../brand-access/brand-context';
 import { CreateApplicationDto } from './dto/create-application.dto';
 import { ListRelationshipsQueryDto } from './dto/list-relationships-query.dto';
 import { PartnershipsService } from './partnerships.service';
 
 @Controller()
-@UseGuards(AccessTokenGuard, RolesGuard)
+@UseGuards(AccessTokenGuard, RolesGuard, BrandContextGuard)
 export class PartnershipsController {
   constructor(private readonly partnerships: PartnershipsService) {}
 
@@ -77,75 +79,83 @@ export class PartnershipsController {
   }
 
   @Get('brand/offers/:offerId/applications')
-  @Roles(UserRole.BRAND)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   listOfferApplications(
     @CurrentUser() user: AuthenticatedUser,
     @Param('offerId', ParseUUIDPipe) offerId: string,
+    @ActiveBrandId() brandId: string,
   ) {
-    return this.partnerships.listBrandApplications(user.id, offerId);
+    return this.partnerships.listBrandApplications(user.id, offerId, brandId);
   }
 
   @Get('brand/applications/:id')
-  @Roles(UserRole.BRAND)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   getBrandApplication(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) applicationId: string,
+    @ActiveBrandId() brandId: string,
   ) {
-    return this.partnerships.getBrandApplication(user.id, applicationId);
+    return this.partnerships.getBrandApplication(user.id, applicationId, brandId);
   }
 
   @Post('brand/applications/:id/approve')
-  @Roles(UserRole.BRAND)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   approveApplication(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) applicationId: string,
+    @ActiveBrandId() brandId: string,
   ) {
-    return this.partnerships.approveApplication(user.id, applicationId);
+    return this.partnerships.approveApplication(user.id, applicationId, brandId);
   }
 
   @Post('brand/applications/:id/reject')
-  @Roles(UserRole.BRAND)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   rejectApplication(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) applicationId: string,
+    @ActiveBrandId() brandId: string,
   ) {
-    return this.partnerships.rejectApplication(user.id, applicationId);
+    return this.partnerships.rejectApplication(user.id, applicationId, brandId);
   }
 
   @Get('brand/affiliate-relationships')
-  @Roles(UserRole.BRAND)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   listBrandRelationships(
     @CurrentUser() user: AuthenticatedUser,
     @Query() query: ListRelationshipsQueryDto,
+    @ActiveBrandId() brandId: string,
   ) {
-    return this.partnerships.listBrandRelationships(user.id, query.offerId);
+    return this.partnerships.listBrandRelationships(user.id, query.offerId, brandId);
   }
 
   @Post('brand/affiliate-relationships/:id/pause')
-  @Roles(UserRole.BRAND)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   pauseRelationship(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) relationshipId: string,
+    @ActiveBrandId() brandId: string,
   ) {
-    return this.partnerships.transitionRelationship(user.id, relationshipId, 'PAUSED');
+    return this.partnerships.transitionRelationship(user.id, relationshipId, 'PAUSED', brandId);
   }
 
   @Post('brand/affiliate-relationships/:id/activate')
-  @Roles(UserRole.BRAND)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   activateRelationship(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) relationshipId: string,
+    @ActiveBrandId() brandId: string,
   ) {
-    return this.partnerships.transitionRelationship(user.id, relationshipId, 'ACTIVE');
+    return this.partnerships.transitionRelationship(user.id, relationshipId, 'ACTIVE', brandId);
   }
 
   @Post('brand/affiliate-relationships/:id/revoke')
-  @Roles(UserRole.BRAND)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   revokeRelationship(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) relationshipId: string,
+    @ActiveBrandId() brandId: string,
   ) {
-    return this.partnerships.transitionRelationship(user.id, relationshipId, 'REVOKED');
+    return this.partnerships.transitionRelationship(user.id, relationshipId, 'REVOKED', brandId);
   }
 }
 

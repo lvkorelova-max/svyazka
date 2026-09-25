@@ -18,6 +18,7 @@ import {
 import { randomUUID } from 'crypto';
 import { extname } from 'path';
 import { PrismaService } from '../prisma/prisma.service';
+import { BrandAccessService } from '../brand-access/brand-access.service';
 import { S3StorageService } from '../storage/storage.service';
 import { InitCreatorKitUploadDto } from './dto/init-upload.dto';
 import { UpsertCreatorKitDto } from './dto/upsert-creator-kit.dto';
@@ -61,16 +62,17 @@ export class CreatorKitService {
     private readonly prisma: PrismaService,
     private readonly storage: S3StorageService,
     private readonly config: ConfigService,
+    private readonly brands: BrandAccessService,
   ) {}
 
-  async getBrandKit(userId: string, offerId: string) {
-    const offer = await this.getOwnedOffer(userId, offerId);
+  async getBrandKit(userId: string, offerId: string, activeBrandId?: string) {
+    const offer = await this.getOwnedOffer(userId, offerId, activeBrandId);
     const kit = await this.ensureKit(offer.id);
     return this.present(kit, offer, false);
   }
 
-  async updateBrandKit(userId: string, offerId: string, dto: UpsertCreatorKitDto) {
-    const offer = await this.getOwnedOffer(userId, offerId);
+  async updateBrandKit(userId: string, offerId: string, dto: UpsertCreatorKitDto, activeBrandId?: string) {
+    const offer = await this.getOwnedOffer(userId, offerId, activeBrandId);
     const kit = await this.ensureKit(offer.id);
     await this.prisma.$transaction(async (tx) => {
       if (dto.scenarios) {
@@ -113,15 +115,16 @@ export class CreatorKitService {
         });
       }
     });
-    return this.getBrandKit(userId, offerId);
+    return this.getBrandKit(userId, offerId, activeBrandId);
   }
 
   async getBrandPreview(
     userId: string,
     offerId: string,
     accessLevel: CreatorKitAccessLevel,
+    activeBrandId?: string,
   ) {
-    const offer = await this.getOwnedOffer(userId, offerId);
+    const offer = await this.getOwnedOffer(userId, offerId, activeBrandId);
     const kit = await this.ensureKit(offer.id);
     return this.present(this.filterKit(kit, offer, accessLevel, true), offer, true);
   }
@@ -160,9 +163,9 @@ export class CreatorKitService {
     );
   }
 
-  async initUpload(userId: string, offerId: string, dto: InitCreatorKitUploadDto) {
-    await this.assertVerifiedBrand(userId);
-    const offer = await this.getOwnedOffer(userId, offerId);
+  async initUpload(userId: string, offerId: string, dto: InitCreatorKitUploadDto, activeBrandId?: string) {
+    await this.assertVerifiedBrand(userId, activeBrandId);
+    const offer = await this.getOwnedOffer(userId, offerId, activeBrandId);
     const kit = await this.ensureKit(offer.id);
     const count = await this.prisma.creatorKitAsset.count({
       where: { creatorKitId: kit.id, status: { not: CreatorKitAssetStatus.DELETED } },
@@ -201,9 +204,9 @@ export class CreatorKitService {
     };
   }
 
-  async completeUpload(userId: string, offerId: string, assetId: string) {
-    await this.assertVerifiedBrand(userId);
-    const { asset } = await this.getOwnedAsset(userId, offerId, assetId);
+  async completeUpload(userId: string, offerId: string, assetId: string, activeBrandId?: string) {
+    await this.assertVerifiedBrand(userId, activeBrandId);
+    const { asset } = await this.getOwnedAsset(userId, offerId, assetId, activeBrandId);
     if (asset.status === CreatorKitAssetStatus.READY) return this.publicAsset(asset);
     if (
       asset.status !== CreatorKitAssetStatus.UPLOADING &&
@@ -236,8 +239,8 @@ export class CreatorKitService {
     }
   }
 
-  async disableAsset(userId: string, offerId: string, assetId: string) {
-    const { asset } = await this.getOwnedAsset(userId, offerId, assetId);
+  async disableAsset(userId: string, offerId: string, assetId: string, activeBrandId?: string) {
+    const { asset } = await this.getOwnedAsset(userId, offerId, assetId, activeBrandId);
     if (asset.status !== CreatorKitAssetStatus.READY) {
       throw new BadRequestException('Отключить можно только активный материал');
     }
@@ -249,8 +252,8 @@ export class CreatorKitService {
     );
   }
 
-  async enableAsset(userId: string, offerId: string, assetId: string) {
-    const { asset } = await this.getOwnedAsset(userId, offerId, assetId);
+  async enableAsset(userId: string, offerId: string, assetId: string, activeBrandId?: string) {
+    const { asset } = await this.getOwnedAsset(userId, offerId, assetId, activeBrandId);
     if (asset.status !== CreatorKitAssetStatus.DISABLED) {
       throw new BadRequestException('Включить можно только отключённый материал');
     }
@@ -265,8 +268,8 @@ export class CreatorKitService {
     );
   }
 
-  async brandDownload(userId: string, offerId: string, assetId: string) {
-    const { asset } = await this.getOwnedAsset(userId, offerId, assetId);
+  async brandDownload(userId: string, offerId: string, assetId: string, activeBrandId?: string) {
+    const { asset } = await this.getOwnedAsset(userId, offerId, assetId, activeBrandId);
     if (
       asset.status !== CreatorKitAssetStatus.READY &&
       asset.status !== CreatorKitAssetStatus.DISABLED
@@ -309,9 +312,8 @@ export class CreatorKitService {
     return { downloadUrl: await this.storage.createDownloadUrl(asset.storageObjectKey, asset.originalFileName) };
   }
 
-  private async getOwnedOffer(userId: string, offerId: string) {
-    const brand = await this.prisma.brandProfile.findUnique({ where: { userId } });
-    if (!brand) throw new ForbiddenException('Профиль бренда не найден');
+  private async getOwnedOffer(userId: string, offerId: string, activeBrandId?: string) {
+    const brand = await this.brands.resolveBrand(userId, activeBrandId);
     const offer = await this.prisma.offer.findUnique({ where: { id: offerId } });
     if (!offer) throw new NotFoundException('Оффер не найден');
     if (offer.brandId !== brand.id) throw new ForbiddenException('Нет доступа к этому офферу');
@@ -324,12 +326,8 @@ export class CreatorKitService {
     return creator;
   }
 
-  private async assertVerifiedBrand(userId: string) {
-    const brand = await this.prisma.brandProfile.findUnique({
-      where: { userId },
-      select: { verificationStatus: true },
-    });
-    if (!brand) throw new ForbiddenException('Профиль бренда не найден');
+  private async assertVerifiedBrand(userId: string, activeBrandId?: string) {
+    const brand = await this.brands.resolveBrand(userId, activeBrandId);
     if (brand.verificationStatus !== BrandVerificationStatus.VERIFIED) {
       throw new ForbiddenException(
         'Загрузка файлов доступна только брендам, подтверждённым администратором',
@@ -346,8 +344,8 @@ export class CreatorKitService {
     });
   }
 
-  private async getOwnedAsset(userId: string, offerId: string, assetId: string) {
-    const offer = await this.getOwnedOffer(userId, offerId);
+  private async getOwnedAsset(userId: string, offerId: string, assetId: string, activeBrandId?: string) {
+    const offer = await this.getOwnedOffer(userId, offerId, activeBrandId);
     const asset = await this.prisma.creatorKitAsset.findFirst({
       where: { id: assetId, creatorKit: { offerId: offer.id } },
     });

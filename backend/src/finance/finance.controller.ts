@@ -19,6 +19,8 @@ import { AdminSecurityGuard } from '../common/guards/admin-security.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { AccessTokenGuard } from '../common/guards/access-token.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { BrandContextGuard } from '../brand-access/brand-context.guard';
+import { ActiveBrandId } from '../brand-access/brand-context';
 import { CancelPayoutDto, CreatePayoutDto } from './dto/create-payout.dto';
 import {
   CreatorAnalyticsQueryDto,
@@ -35,7 +37,7 @@ type CsvUpload = {
 };
 
 @Controller()
-@UseGuards(AccessTokenGuard, RolesGuard)
+@UseGuards(AccessTokenGuard, RolesGuard, BrandContextGuard)
 export class FinanceController {
   constructor(
     private readonly finance: FinanceService,
@@ -47,7 +49,7 @@ export class FinanceController {
   private readonly maxUploadBytes: number;
 
   @Post('brand/order-imports')
-  @Roles(UserRole.BRAND)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   @RateLimit({ scope: 'csv-upload', limit: 100, windowSeconds: 3600 })
   @UseInterceptors(
     FileInterceptor('file', {
@@ -57,71 +59,79 @@ export class FinanceController {
   createOrderImport(
     @CurrentUser() user: AuthenticatedUser,
     @UploadedFile() file?: CsvUpload,
+    @ActiveBrandId() brandId?: string,
   ) {
-    return this.finance.createOrderImport(user.id, file, this.maxUploadBytes);
+    return this.finance.createOrderImport(user.id, file, this.maxUploadBytes, brandId);
   }
 
   @Get('brand/order-imports/:id/preview')
-  @Roles(UserRole.BRAND)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   getOrderImportPreview(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
+    @ActiveBrandId() brandId?: string,
   ) {
-    return this.finance.getOrderImportPreview(user.id, id);
+    return this.finance.getOrderImportPreview(user.id, id, brandId);
   }
 
   @Post('brand/order-imports/:id/confirm')
-  @Roles(UserRole.BRAND)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   confirmOrderImport(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
+    @ActiveBrandId() brandId?: string,
   ) {
-    return this.finance.confirmOrderImport(user.id, id);
+    return this.finance.confirmOrderImport(user.id, id, brandId);
   }
 
   @Get('brand/orders')
-  @Roles(UserRole.BRAND)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   listBrandOrders(
     @CurrentUser() user: AuthenticatedUser,
     @Query() query: ListFinanceQueryDto,
+    @ActiveBrandId() brandId?: string,
   ) {
-    return this.finance.listBrandOrders(user.id, query);
+    return this.finance.listBrandOrders(user.id, query, brandId);
   }
 
   @Get('brand/orders/:id')
-  @Roles(UserRole.BRAND)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   getBrandOrder(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
+    @ActiveBrandId() brandId?: string,
   ) {
-    return this.finance.getBrandOrder(user.id, id);
+    return this.finance.getBrandOrder(user.id, id, brandId);
   }
 
   @Get('brand/commissions')
-  @Roles(UserRole.BRAND)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   listBrandCommissions(
     @CurrentUser() user: AuthenticatedUser,
     @Query() query: ListFinanceQueryDto,
+    @ActiveBrandId() brandId?: string,
   ) {
-    return this.finance.listBrandCommissions(user.id, query);
+    return this.finance.listBrandCommissions(user.id, query, brandId);
   }
 
   @Get('brand/analytics')
-  @Roles(UserRole.BRAND)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   getBrandAnalytics(
     @CurrentUser() user: AuthenticatedUser,
     @Query() query: ListFinanceQueryDto,
+    @ActiveBrandId() brandId?: string,
   ) {
-    return this.finance.getBrandAnalytics(user.id, query);
+    return this.finance.getBrandAnalytics(user.id, query, brandId);
   }
 
   @Get('brand/analytics/creators')
-  @Roles(UserRole.BRAND)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   getCreatorAnalytics(
     @CurrentUser() user: AuthenticatedUser,
     @Query() query: CreatorAnalyticsQueryDto,
+    @ActiveBrandId() brandId?: string,
   ) {
-    return this.finance.getCreatorAnalytics(user.id, query);
+    return this.finance.getCreatorAnalytics(user.id, query, brandId);
   }
 
   @Get('creator/clicks')

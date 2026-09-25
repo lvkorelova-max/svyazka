@@ -27,6 +27,7 @@ import {
 import { CsvRecord, parseCsv } from './csv';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { BrandAccessService } from '../brand-access/brand-access.service';
 
 type CsvUpload = {
   buffer: Buffer;
@@ -64,9 +65,10 @@ export class FinanceService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly audit: AuditService,
+    private readonly brands: BrandAccessService,
   ) {}
 
-  async createOrderImport(userId: string, file: CsvUpload | undefined, maxBytes: number) {
+  async createOrderImport(userId: string, file: CsvUpload | undefined, maxBytes: number, activeBrandId?: string) {
     if (!file) throw new BadRequestException('Выберите CSV-файл');
     if (!file.originalname.toLowerCase().endsWith('.csv')) {
       throw new BadRequestException('Поддерживаются только CSV-файлы');
@@ -82,7 +84,7 @@ export class FinanceService {
       throw new BadRequestException(`Размер CSV должен быть от 1 до ${maxBytes} байт`);
     }
 
-    const brand = await this.getBrand(userId);
+    const brand = await this.getBrand(userId, activeBrandId);
     const orderImport = await this.prisma.orderImport.create({
       data: {
         brandId: brand.id,
@@ -129,7 +131,7 @@ export class FinanceService {
           },
         }),
       ]);
-      const preview = await this.getOrderImportPreview(userId, orderImport.id);
+      const preview = await this.getOrderImportPreview(userId, orderImport.id, activeBrandId);
       await this.audit.record({
         actorUserId: userId,
         action: 'ORDER_IMPORT_PREVIEW_CREATED',
@@ -157,8 +159,8 @@ export class FinanceService {
     }
   }
 
-  async getOrderImportPreview(userId: string, importId: string) {
-    const brand = await this.getBrand(userId);
+  async getOrderImportPreview(userId: string, importId: string, activeBrandId?: string) {
+    const brand = await this.getBrand(userId, activeBrandId);
     const orderImport = await this.prisma.orderImport.findFirst({
       where: { id: importId, brandId: brand.id },
       include: {
@@ -176,8 +178,8 @@ export class FinanceService {
     return orderImport;
   }
 
-  async confirmOrderImport(userId: string, importId: string) {
-    const brand = await this.getBrand(userId);
+  async confirmOrderImport(userId: string, importId: string, activeBrandId?: string) {
+    const brand = await this.getBrand(userId, activeBrandId);
     const orderImport = await this.prisma.orderImport.findFirst({
       where: { id: importId, brandId: brand.id },
       include: { rows: { orderBy: { rowNumber: 'asc' } } },
@@ -295,13 +297,13 @@ export class FinanceService {
     return { id: orderImport.id, status: OrderImportStatus.IMPORTED, ...applied };
   }
 
-  async listBrandOrders(userId: string, query: ListFinanceQueryDto) {
-    const brand = await this.getBrand(userId);
+  async listBrandOrders(userId: string, query: ListFinanceQueryDto, activeBrandId?: string) {
+    const brand = await this.getBrand(userId, activeBrandId);
     return this.paginateOrders({ brandId: brand.id }, query);
   }
 
-  async getBrandOrder(userId: string, orderId: string) {
-    const brand = await this.getBrand(userId);
+  async getBrandOrder(userId: string, orderId: string, activeBrandId?: string) {
+    const brand = await this.getBrand(userId, activeBrandId);
     const order = await this.prisma.order.findFirst({
       where: { id: orderId, brandId: brand.id },
       include: {
@@ -314,21 +316,21 @@ export class FinanceService {
     return order;
   }
 
-  async listBrandCommissions(userId: string, query: ListFinanceQueryDto) {
-    const brand = await this.getBrand(userId);
+  async listBrandCommissions(userId: string, query: ListFinanceQueryDto, activeBrandId?: string) {
+    const brand = await this.getBrand(userId, activeBrandId);
     return this.paginateCommissions({ order: { brandId: brand.id } }, query);
   }
 
-  async getBrandAnalytics(userId: string, query: ListFinanceQueryDto) {
+  async getBrandAnalytics(userId: string, query: ListFinanceQueryDto, activeBrandId?: string) {
     const report = await this.getCreatorAnalytics(userId, {
       ...query,
       sortBy: 'netSalesKopecks',
-    } as CreatorAnalyticsQueryDto);
+    } as CreatorAnalyticsQueryDto, activeBrandId);
     return report.total;
   }
 
-  async getCreatorAnalytics(userId: string, query: CreatorAnalyticsQueryDto) {
-    const brand = await this.getBrand(userId);
+  async getCreatorAnalytics(userId: string, query: CreatorAnalyticsQueryDto, activeBrandId?: string) {
+    const brand = await this.getBrand(userId, activeBrandId);
     if (query.offerId) await this.assertOwnedOffer(brand.id, query.offerId);
     const range = this.orderDateRange(query);
     const orderWhere: Prisma.OrderWhereInput = {
@@ -1351,10 +1353,8 @@ export class FinanceService {
     return Number.isInteger(value) && value > 0 ? value : fallback;
   }
 
-  private async getBrand(userId: string) {
-    const brand = await this.prisma.brandProfile.findUnique({ where: { userId } });
-    if (!brand) throw new ForbiddenException('Профиль бренда не найден');
-    return brand;
+  private async getBrand(userId: string, activeBrandId?: string) {
+    return this.brands.resolveBrand(userId, activeBrandId);
   }
 
   private async getCreator(userId: string) {

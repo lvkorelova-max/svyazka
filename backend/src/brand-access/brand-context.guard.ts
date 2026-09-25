@@ -9,12 +9,12 @@ import { UserRole } from '@prisma/client';
 import { isUUID } from 'class-validator';
 import { Request } from 'express';
 import { AuthenticatedUser } from '../auth/auth.types';
-import { PrismaService } from '../prisma/prisma.service';
 import { BrandContextRequest } from './brand-context';
+import { BrandAccessService } from './brand-access.service';
 
 @Injectable()
 export class BrandContextGuard implements CanActivate {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly brands: BrandAccessService) {}
 
   async canActivate(context: ExecutionContext) {
     const request = context
@@ -29,12 +29,7 @@ export class BrandContextGuard implements CanActivate {
       throw new ForbiddenException('Требуется явный активный бренд');
     }
 
-    const assignment = await this.prisma.brandManagerAssignment.findFirst({
-      where: { brandId, managerId: user.id, removedAt: null },
-      select: { brandId: true },
-    });
-    if (!assignment) throw new ForbiddenException('Нет активного доступа к бренду');
-
+    await this.brands.getActiveBrandForManager(user.id, brandId);
     request.activeBrandId = brandId;
     return true;
   }
