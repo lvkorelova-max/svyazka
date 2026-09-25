@@ -55,6 +55,7 @@ describe('Stage 5B authorization hardening', () => {
     await prisma.passwordResetToken.deleteMany();
     await prisma.adminRecoveryCode.deleteMany();
     await prisma.auditLog.deleteMany();
+    await prisma.managerInvitation.deleteMany();
     await prisma.ledgerEntry.deleteMany();
     await prisma.commission.deleteMany();
     await prisma.payout.deleteMany();

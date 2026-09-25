@@ -13,6 +13,7 @@ import { SecurityModule } from './common/security.module';
 import { HealthModule } from './health/health.module';
 import { BrandAccessModule } from './brand-access/brand-access.module';
 import { ManagerModule } from './manager/manager.module';
+import { ManagerInvitationModule } from './manager-invitation/manager-invitation.module';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { ManagerModule } from './manager/manager.module';
     BrandAccessModule,
     AuthModule,
     ManagerModule,
+    ManagerInvitationModule,
     CreatorKitModule,
     ProfilesModule,
     OffersModule,

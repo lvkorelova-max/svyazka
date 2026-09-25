@@ -110,6 +110,7 @@ describe('Stage 4 affiliate finance end-to-end', () => {
     await prisma.passwordResetToken.deleteMany();
     await prisma.adminRecoveryCode.deleteMany();
     await prisma.auditLog.deleteMany();
+    await prisma.managerInvitation.deleteMany();
     await prisma.ledgerEntry.deleteMany();
     await prisma.commission.deleteMany();
     await prisma.payout.deleteMany();

@@ -181,6 +181,13 @@ enum BrandVerificationStatus {
   VERIFIED
 }
 
+enum ManagerInvitationStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
 model User {
   id                   String             @id @default(uuid()) @db.Uuid
   email                String             @unique @db.VarChar(320)
@@ -215,6 +222,8 @@ model User {
   offersResponsible     Offer[]            @relation("OfferCurrentManager")
   relationshipsResponsible AffiliateRelationship[] @relation("RelationshipCurrentManager")
   attributedOrders      Order[]            @relation("OrderAttributionManager")
+  managerInvitationsCreated ManagerInvitation[] @relation("ManagerInvitationInvitedBy")
+  managerInvitationsAccepted ManagerInvitation[] @relation("ManagerInvitationAcceptedBy")
   createdAt            DateTime           @default(now())
   updatedAt            DateTime           @updatedAt
 
@@ -249,6 +258,7 @@ model BrandProfile {
   orderImports       OrderImport[]
   orders             Order[]
   managerAssignments BrandManagerAssignment[]
+  managerInvitations ManagerInvitation[]
   createdAt          DateTime                @default(now())
   updatedAt          DateTime                @updatedAt
 
@@ -606,6 +616,28 @@ model BrandManagerAssignment {
 
   @@index([brandId, removedAt])
   @@index([managerId, removedAt])
+}
+
+model ManagerInvitation {
+  id               String                  @id @default(uuid()) @db.Uuid
+  brandId          String                  @db.Uuid
+  email            String                  @db.VarChar(320)
+  displayName      String                  @db.VarChar(160)
+  status           ManagerInvitationStatus @default(PENDING)
+  tokenHash        String                  @unique @db.Char(64)
+  expiresAt        DateTime
+  createdAt        DateTime                @default(now())
+  acceptedAt       DateTime?
+  revokedAt        DateTime?
+  invitedByUserId  String                  @db.Uuid
+  acceptedByUserId String?                 @db.Uuid
+  brand            BrandProfile            @relation(fields: [brandId], references: [id], onDelete: Restrict)
+  invitedBy        User                    @relation("ManagerInvitationInvitedBy", fields: [invitedByUserId], references: [id], onDelete: Restrict)
+  acceptedBy       User?                   @relation("ManagerInvitationAcceptedBy", fields: [acceptedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([brandId, status, createdAt])
+  @@index([email, status])
+  @@index([status, expiresAt])
 }
 
 model Commission {
