@@ -39,4 +39,20 @@ export class BrandAccessService {
     if (!brand) throw new NotFoundException('Бренд не найден');
     return brand;
   }
+
+  async assertManagerAssignedToBrand(managerId: string, brandId: string) {
+    const manager = await this.prisma.user.findUnique({
+      where: { id: managerId },
+      select: { role: true, status: true },
+    });
+    if (
+      !manager ||
+      manager.role !== UserRole.MANAGER ||
+      manager.status !== UserStatus.ACTIVE
+    ) {
+      throw new ForbiddenException('Целевой менеджер недоступен');
+    }
+    await this.getActiveBrandForManager(managerId, brandId);
+    return managerId;
+  }
 }

@@ -236,6 +236,7 @@ export class PartnershipsService {
                 affiliateCode,
                 promoCode,
                 destinationUrl: application.offer.productUrl,
+                currentManagerId: application.offer.currentManagerId,
               },
             });
           },
@@ -343,6 +344,40 @@ export class PartnershipsService {
         metadata: { offerId: relationship.offerId, creatorId: relationship.creatorId },
       });
     }
+    return this.presentRelationship(updated);
+  }
+
+  async updateResponsibility(
+    userId: string,
+    relationshipId: string,
+    activeBrandId: string,
+    managerId: string | null,
+  ) {
+    const brand = await this.getBrand(userId, activeBrandId);
+    const relationship = await this.prisma.affiliateRelationship.findUnique({
+      where: { id: relationshipId },
+      include: { offer: true },
+    });
+    if (!relationship) throw new NotFoundException('Партнёрская связь не найдена');
+    if (relationship.offer.brandId !== brand.id) {
+      throw new ForbiddenException('Нет доступа к этой партнёрской связи');
+    }
+    if (managerId) await this.brands.assertManagerAssignedToBrand(managerId, brand.id);
+    const updated = await this.prisma.affiliateRelationship.update({
+      where: { id: relationship.id },
+      data: { currentManagerId: managerId },
+      include: RELATIONSHIP_INCLUDE,
+    });
+    await this.audit.record({
+      actorUserId: userId,
+      action: 'AFFILIATE_RELATIONSHIP_RESPONSIBILITY_CHANGED',
+      entityType: 'AffiliateRelationship',
+      entityId: relationship.id,
+      metadata: {
+        previousManagerId: relationship.currentManagerId,
+        newManagerId: managerId,
+      },
+    });
     return this.presentRelationship(updated);
   }
 

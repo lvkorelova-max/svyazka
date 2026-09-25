@@ -211,6 +211,12 @@ export class FinanceService {
 
           let order: Order;
           if (row.action === OrderImportAction.CREATE) {
+            const attributedRelationship = row.attributedRelationshipId
+              ? await tx.affiliateRelationship.findUnique({
+                  where: { id: row.attributedRelationshipId },
+                  select: { currentManagerId: true },
+                })
+              : null;
             order = await tx.order.create({
               data: {
                 brandId: brand.id,
@@ -229,6 +235,7 @@ export class FinanceService {
                 clickId: row.clickId,
                 creatorCommissionBps: row.creatorCommissionBpsSnapshot!,
                 platformCommissionBps: row.platformCommissionBpsSnapshot!,
+                managerIdAtAttribution: attributedRelationship?.currentManagerId ?? null,
               },
             });
             created += 1;

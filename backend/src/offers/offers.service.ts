@@ -31,6 +31,10 @@ export class OffersService {
 
   async create(userId: string, dto: CreateOfferDto, activeBrandId?: string) {
     const brand = await this.brands.resolveBrand(userId, activeBrandId);
+    const manager = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { role: true },
+    });
     const platformCommissionBps = Number(
       this.config.get<string>('PLATFORM_COMMISSION_BPS') ?? 500,
     );
@@ -45,6 +49,9 @@ export class OffersService {
       data: {
         ...dto,
         brandId: brand.id,
+        ...(manager?.role === 'MANAGER'
+          ? { createdByManagerId: userId, currentManagerId: userId }
+          : {}),
         platformCommissionBps,
         status: OfferStatus.DRAFT,
       },
@@ -116,6 +123,32 @@ export class OffersService {
       entityType: 'Offer',
       entityId: offer.id,
       metadata: { previousStatus: offer.status, nextStatus: target },
+    });
+    return updated;
+  }
+
+  async updateResponsibility(
+    userId: string,
+    offerId: string,
+    activeBrandId: string,
+    managerId: string | null,
+  ) {
+    const offer = await this.getOwn(userId, offerId, activeBrandId);
+    if (managerId) await this.brands.assertManagerAssignedToBrand(managerId, offer.brandId);
+    const updated = await this.prisma.offer.update({
+      where: { id: offer.id },
+      data: { currentManagerId: managerId },
+      include: { brand: true },
+    });
+    await this.audit.record({
+      actorUserId: userId,
+      action: 'OFFER_RESPONSIBILITY_CHANGED',
+      entityType: 'Offer',
+      entityId: offer.id,
+      metadata: {
+        previousManagerId: offer.currentManagerId,
+        newManagerId: managerId,
+      },
     });
     return updated;
   }

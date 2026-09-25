@@ -7,6 +7,7 @@ import { AccessTokenGuard } from '../common/guards/access-token.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { BrandContextGuard } from '../brand-access/brand-context.guard';
 import { ActiveBrandId } from '../brand-access/brand-context';
+import { UpdateResponsibilityDto } from '../manager/dto/update-responsibility.dto';
 import { CreateOfferDto } from './dto/create-offer.dto';
 import { UpdateOfferDto } from './dto/update-offer.dto';
 import { OffersService } from './offers.service';
@@ -77,6 +78,17 @@ export class OffersController {
     @ActiveBrandId() brandId: string,
   ) {
     return this.offers.transition(user.id, offerId, OfferStatus.ARCHIVED, brandId);
+  }
+
+  @Patch('brand/offers/:id/responsibility')
+  @Roles(UserRole.MANAGER)
+  updateResponsibility(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) offerId: string,
+    @ActiveBrandId() brandId: string,
+    @Body() dto: UpdateResponsibilityDto,
+  ) {
+    return this.offers.updateResponsibility(user.id, offerId, brandId, dto.managerId ?? null);
   }
 
   @Get('creator/offers')

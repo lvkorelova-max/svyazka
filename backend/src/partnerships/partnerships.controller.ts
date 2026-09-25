@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
   ParseUUIDPipe,
   Post,
   Query,
@@ -20,6 +21,7 @@ import { AccessTokenGuard } from '../common/guards/access-token.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { BrandContextGuard } from '../brand-access/brand-context.guard';
 import { ActiveBrandId } from '../brand-access/brand-context';
+import { UpdateResponsibilityDto } from '../manager/dto/update-responsibility.dto';
 import { CreateApplicationDto } from './dto/create-application.dto';
 import { ListRelationshipsQueryDto } from './dto/list-relationships-query.dto';
 import { PartnershipsService } from './partnerships.service';
@@ -156,6 +158,22 @@ export class PartnershipsController {
     @ActiveBrandId() brandId: string,
   ) {
     return this.partnerships.transitionRelationship(user.id, relationshipId, 'REVOKED', brandId);
+  }
+
+  @Patch('brand/affiliate-relationships/:id/responsibility')
+  @Roles(UserRole.MANAGER)
+  updateResponsibility(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) relationshipId: string,
+    @ActiveBrandId() brandId: string,
+    @Body() dto: UpdateResponsibilityDto,
+  ) {
+    return this.partnerships.updateResponsibility(
+      user.id,
+      relationshipId,
+      brandId,
+      dto.managerId ?? null,
+    );
   }
 }
 

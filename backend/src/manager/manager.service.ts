@@ -130,6 +130,14 @@ export class ManagerService {
         where: { id: active.id },
         data: { removedAt, removedBy: adminUserId },
       });
+      await tx.offer.updateMany({
+        where: { brandId, currentManagerId: managerId },
+        data: { currentManagerId: null },
+      });
+      await tx.affiliateRelationship.updateMany({
+        where: { offer: { brandId }, currentManagerId: managerId },
+        data: { currentManagerId: null },
+      });
       await tx.auditLog.create({
         data: {
           actorUserId: adminUserId,
@@ -137,7 +145,11 @@ export class ManagerService {
           entityType: 'BrandManagerAssignment',
           entityId: assignment.id,
           requestId: this.audit.requestId(),
-          metadata: { brandId, managerId },
+          metadata: {
+            brandId,
+            managerId,
+            responsibilitiesCleared: true,
+          },
         },
       });
       return assignment;

@@ -95,6 +95,8 @@ describe('ManagerService', () => {
         findFirst: jest.fn().mockResolvedValue({ id: 'assignment' }),
         update,
       },
+      offer: { updateMany: jest.fn() },
+      affiliateRelationship: { updateMany: jest.fn() },
       auditLog: { create: jest.fn() },
     };
     prisma.$transaction.mockImplementation((callback: (value: unknown) => unknown) => callback(tx));
