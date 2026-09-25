@@ -46,7 +46,16 @@ export class ManagerService {
   async listBrandManagers(adminUserId: string, brandId: string) {
     await this.requireAdmin(adminUserId);
     await this.requireBrand(brandId);
-    return this.prisma.brandManagerAssignment.findMany({
+    return this.listActiveBrandManagers(brandId);
+  }
+
+  async listOwnBrandManagers(brandUserId: string) {
+    const brand = await this.requireOwnedBrand(brandUserId);
+    return this.listActiveBrandManagers(brand.id);
+  }
+
+  private async listActiveBrandManagers(brandId: string) {
+    const assignments = await this.prisma.brandManagerAssignment.findMany({
       where: { brandId, removedAt: null },
       orderBy: { assignedAt: 'asc' },
       include: {
@@ -60,6 +69,7 @@ export class ManagerService {
         },
       },
     });
+    return assignments.map((assignment) => ({ ...assignment, active: true }));
   }
 
   async listEligibleManagers(adminUserId: string) {
@@ -79,6 +89,19 @@ export class ManagerService {
   async assignManager(adminUserId: string, brandId: string, managerId: string) {
     await this.requireAdmin(adminUserId);
     await this.requireBrand(brandId);
+    return this.assignManagerToBrand(adminUserId, brandId, managerId);
+  }
+
+  async assignOwnBrandManager(brandUserId: string, managerId: string) {
+    const brand = await this.requireOwnedBrand(brandUserId);
+    return this.assignManagerToBrand(brandUserId, brand.id, managerId);
+  }
+
+  private async assignManagerToBrand(
+    actorUserId: string,
+    brandId: string,
+    managerId: string,
+  ) {
     const manager = await this.prisma.user.findUnique({
       where: { id: managerId },
       include: { managerProfile: true },
@@ -100,12 +123,12 @@ export class ManagerService {
       });
 
       const assignment = await tx.brandManagerAssignment.create({
-        data: { brandId, managerId, assignedBy: adminUserId },
+        data: { brandId, managerId, assignedBy: actorUserId },
       });
 
       await tx.auditLog.create({
         data: {
-          actorUserId: adminUserId,
+          actorUserId,
           action: 'BRAND_MANAGER_ASSIGNED',
           entityType: 'BrandManagerAssignment',
           entityId: assignment.id,
@@ -120,6 +143,19 @@ export class ManagerService {
   async removeManager(adminUserId: string, brandId: string, managerId: string) {
     await this.requireAdmin(adminUserId);
     await this.requireBrand(brandId);
+    return this.removeManagerFromBrand(adminUserId, brandId, managerId);
+  }
+
+  async removeOwnBrandManager(brandUserId: string, managerId: string) {
+    const brand = await this.requireOwnedBrand(brandUserId);
+    return this.removeManagerFromBrand(brandUserId, brand.id, managerId);
+  }
+
+  private async removeManagerFromBrand(
+    actorUserId: string,
+    brandId: string,
+    managerId: string,
+  ) {
     return this.prisma.$transaction(async (tx) => {
       const active = await tx.brandManagerAssignment.findFirst({
         where: { brandId, managerId, removedAt: null },
@@ -128,7 +164,7 @@ export class ManagerService {
       const removedAt = new Date();
       const assignment = await tx.brandManagerAssignment.update({
         where: { id: active.id },
-        data: { removedAt, removedBy: adminUserId },
+        data: { removedAt, removedBy: actorUserId },
       });
       await tx.offer.updateMany({
         where: { brandId, currentManagerId: managerId },
@@ -140,7 +176,7 @@ export class ManagerService {
       });
       await tx.auditLog.create({
         data: {
-          actorUserId: adminUserId,
+          actorUserId,
           action: 'BRAND_MANAGER_REMOVED',
           entityType: 'BrandManagerAssignment',
           entityId: assignment.id,
@@ -194,6 +230,14 @@ export class ManagerService {
   private async requireBrand(brandId: string) {
     const brand = await this.prisma.brandProfile.findUnique({ where: { id: brandId } });
     if (!brand) throw new NotFoundException('Бренд не найден');
+    return brand;
+  }
+
+  private async requireOwnedBrand(brandUserId: string) {
+    const brand = await this.prisma.brandProfile.findUnique({
+      where: { userId: brandUserId },
+    });
+    if (!brand) throw new NotFoundException('Профиль бренда не найден');
     return brand;
   }
 }

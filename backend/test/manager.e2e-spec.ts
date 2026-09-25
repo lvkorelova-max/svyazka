@@ -21,6 +21,7 @@ describe('Manager access and responsibility end-to-end', () => {
 
   let brandAId: string;
   let brandBId: string;
+  let brandAUserId: string;
   let annaId: string;
   let mariaId: string;
   let charlieId: string;
@@ -230,6 +231,7 @@ describe('Manager access and responsibility end-to-end', () => {
     });
     brandAId = brandAUser.brandProfile!.id;
     brandBId = brandBUser.brandProfile!.id;
+    brandAUserId = brandAUser.id;
 
     const admin = await createPrivilegedUser(
       'manager-admin@example.test',
@@ -328,6 +330,95 @@ describe('Manager access and responsibility end-to-end', () => {
     await request(app.getHttpServer())
       .get('/api/brand/offers')
       .set(managerHeaders(annaToken, brandBId))
+      .expect(200);
+  });
+
+  it('allows BRAND to manage only its own team and preserves assignment periods', async () => {
+    const initialTeam = await request(app.getHttpServer())
+      .get('/api/brand/team/managers')
+      .set(auth(brandAToken))
+      .expect(200);
+    expect(initialTeam.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          managerId: annaId,
+          active: true,
+          manager: expect.objectContaining({
+            id: annaId,
+            email: 'manager-anna@example.test',
+            managerProfile: expect.objectContaining({
+              displayName: 'manager-anna@example.test',
+            }),
+          }),
+        }),
+        expect.objectContaining({
+          managerId: mariaId,
+          active: true,
+        }),
+      ]),
+    );
+
+    await request(app.getHttpServer())
+      .get('/api/brand/team/managers')
+      .set(auth(annaToken))
+      .expect(403);
+    await request(app.getHttpServer())
+      .post(`/api/brand/team/managers/${charlieId}`)
+      .set(auth(annaToken))
+      .expect(403);
+    await request(app.getHttpServer())
+      .delete(`/api/brand/team/managers/${mariaId}`)
+      .set(auth(annaToken))
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .post(`/api/brand/team/managers/${charlieId}`)
+      .set(auth(brandAToken))
+      .expect(201);
+    expect(
+      await prisma.auditLog.count({
+        where: {
+          actorUserId: brandAUserId,
+          action: 'BRAND_MANAGER_ASSIGNED',
+          metadata: { path: ['managerId'], equals: charlieId },
+        },
+      }),
+    ).toBe(1);
+    await request(app.getHttpServer())
+      .post(`/api/brand/team/managers/${charlieId}`)
+      .set(auth(brandAToken))
+      .expect(409);
+
+    await request(app.getHttpServer())
+      .delete(`/api/brand/team/managers/${charlieId}`)
+      .set(auth(brandBToken))
+      .expect(404);
+    expect(
+      await prisma.brandManagerAssignment.count({
+        where: { brandId: brandAId, managerId: charlieId, removedAt: null },
+      }),
+    ).toBe(1);
+
+    await request(app.getHttpServer())
+      .delete(`/api/brand/team/managers/${charlieId}`)
+      .set(auth(brandAToken))
+      .expect(200);
+    await request(app.getHttpServer())
+      .post(`/api/brand/team/managers/${charlieId}`)
+      .set(auth(brandAToken))
+      .expect(201);
+
+    const periods = await prisma.brandManagerAssignment.findMany({
+      where: { brandId: brandAId, managerId: charlieId },
+      orderBy: { assignedAt: 'asc' },
+    });
+    expect(periods).toHaveLength(2);
+    expect(periods[0].removedAt).not.toBeNull();
+    expect(periods[1].removedAt).toBeNull();
+
+    await request(app.getHttpServer())
+      .delete(`/api/brand/team/managers/${charlieId}`)
+      .set(auth(brandAToken))
       .expect(200);
   });
 
@@ -468,13 +559,13 @@ describe('Manager access and responsibility end-to-end', () => {
     expect(unassignedOrder.managerIdAtAttribution).toBeNull();
   });
 
-  it('removes manager access and clears only current responsibility', async () => {
+  it('lets BRAND remove its manager and clears only current responsibility', async () => {
     await transferOffer(mariaToken, brandAId, annaId);
     await transferRelationship(mariaToken, brandAId, annaId);
 
     await request(app.getHttpServer())
-      .delete(`/api/admin/brands/${brandAId}/managers/${annaId}`)
-      .set(auth(adminToken))
+      .delete(`/api/brand/team/managers/${annaId}`)
+      .set(auth(brandAToken))
       .expect(200);
 
     const assignment = await prisma.brandManagerAssignment.findFirstOrThrow({
@@ -482,7 +573,16 @@ describe('Manager access and responsibility end-to-end', () => {
       orderBy: { assignedAt: 'desc' },
     });
     expect(assignment.removedAt).not.toBeNull();
-    expect(assignment.removedBy).not.toBeNull();
+    expect(assignment.removedBy).toBe(brandAUserId);
+    expect(
+      await prisma.auditLog.count({
+        where: {
+          actorUserId: brandAUserId,
+          action: 'BRAND_MANAGER_REMOVED',
+          metadata: { path: ['managerId'], equals: annaId },
+        },
+      }),
+    ).toBe(1);
 
     expect(
       await prisma.offer.findUniqueOrThrow({

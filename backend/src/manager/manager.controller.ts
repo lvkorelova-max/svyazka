@@ -45,6 +45,30 @@ export class ManagerController {
     return this.managers.listBrands(user.id);
   }
 
+  @Get('brand/team/managers')
+  @Roles(UserRole.BRAND)
+  listOwnBrandManagers(@CurrentUser() brand: AuthenticatedUser) {
+    return this.managers.listOwnBrandManagers(brand.id);
+  }
+
+  @Post('brand/team/managers/:managerId')
+  @Roles(UserRole.BRAND)
+  assignOwnBrandManager(
+    @CurrentUser() brand: AuthenticatedUser,
+    @Param('managerId', ParseUUIDPipe) managerId: string,
+  ) {
+    return this.managers.assignOwnBrandManager(brand.id, managerId);
+  }
+
+  @Delete('brand/team/managers/:managerId')
+  @Roles(UserRole.BRAND)
+  removeOwnBrandManager(
+    @CurrentUser() brand: AuthenticatedUser,
+    @Param('managerId', ParseUUIDPipe) managerId: string,
+  ) {
+    return this.managers.removeOwnBrandManager(brand.id, managerId);
+  }
+
   @Get('admin/managers/eligible')
   @Roles(UserRole.ADMIN)
   @UseGuards(AdminSecurityGuard)

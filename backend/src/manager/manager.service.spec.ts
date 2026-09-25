@@ -162,4 +162,72 @@ describe('ManagerService', () => {
       NotFoundException,
     );
   });
+
+  it('lists only the authenticated BRAND users own active team', async () => {
+    prisma.brandProfile.findUnique.mockResolvedValue({ id: 'brand-a', userId: 'brand-user' });
+    prisma.brandManagerAssignment.findMany.mockResolvedValue([
+      {
+        id: 'assignment-a',
+        managerId: 'manager-a',
+        assignedAt: new Date('2026-09-25T02:00:00Z'),
+        removedAt: null,
+        manager: {
+          id: 'manager-a',
+          email: 'manager-a@example.test',
+          status: UserStatus.ACTIVE,
+          managerProfile: { displayName: 'Manager A', jobTitle: null },
+        },
+      },
+    ]);
+
+    await expect(
+      new ManagerService(prisma, audit).listOwnBrandManagers('brand-user'),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: 'assignment-a',
+        managerId: 'manager-a',
+        active: true,
+      }),
+    ]);
+    expect(prisma.brandProfile.findUnique).toHaveBeenCalledWith({
+      where: { userId: 'brand-user' },
+    });
+    expect(prisma.brandManagerAssignment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { brandId: 'brand-a', removedAt: null } }),
+    );
+  });
+
+  it('uses the authenticated BRAND as assignment actor for its own team', async () => {
+    prisma.brandProfile.findUnique.mockResolvedValue({ id: 'brand-a', userId: 'brand-user' });
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'manager-a',
+      email: 'manager-a@example.test',
+      role: UserRole.MANAGER,
+      status: UserStatus.ACTIVE,
+      managerProfile: null,
+    });
+    const create = jest.fn().mockResolvedValue({ id: 'assignment-a' });
+    const tx = {
+      brandManagerAssignment: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create,
+      },
+      managerProfile: { upsert: jest.fn() },
+      auditLog: { create: jest.fn() },
+    };
+    prisma.$transaction.mockImplementation((callback: (value: unknown) => unknown) => callback(tx));
+
+    await new ManagerService(prisma, audit).assignOwnBrandManager('brand-user', 'manager-a');
+
+    expect(create).toHaveBeenCalledWith({
+      data: {
+        brandId: 'brand-a',
+        managerId: 'manager-a',
+        assignedBy: 'brand-user',
+      },
+    });
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ actorUserId: 'brand-user' }),
+    });
+  });
 });
