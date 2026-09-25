@@ -1,5 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { api, restoreSession, setAccessToken } from "./api/client";
+import {
+  api,
+  restoreSession,
+  setAccessToken,
+  setActiveBrandId as setApiActiveBrandId
+} from "./api/client";
 
 const productImages = {
   skincare: "https://images.unsplash.com/photo-1556228578-8c89e6adf883?auto=format&fit=crop&w=1200&q=85",
@@ -304,9 +309,12 @@ const pageTitles = {
   login: "Вход",
   creator: "Кабинет креатора",
   brand: "Кабинет бренда",
+  manager: "Выбор бренда",
   create: "Создание оффера",
   admin: "Админ-панель"
 };
+
+const managerBrandStorageKey = (userId) => `svyazka:manager-active-brand:${userId}`;
 
 function Status({ type = "", children }) {
   return <span className={`status ${type}`}>{children}</span>;
@@ -323,6 +331,7 @@ function BrandLogo({ onClick }) {
 
 function Header({ page, role, navigate, logout }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const cabinetPage = role === "manager" ? "brand" : role;
 
   const go = (target, options = {}) => {
     setMobileOpen(false);
@@ -337,7 +346,7 @@ function Header({ page, role, navigate, logout }) {
           <button className={`nav-button ${page === "catalog" ? "active" : ""}`} onClick={() => go("catalog")}>Офферы</button>
           <button className="nav-button" onClick={() => go("home", { anchor: "how" })}>Как это работает</button>
           {role === "creator" && <button className={`nav-button ${page === "creator" ? "active" : ""}`} onClick={() => go("creator")}>Мой кабинет</button>}
-          {role === "brand" && <button className={`nav-button ${page === "brand" ? "active" : ""}`} onClick={() => go("brand")}>Кабинет бренда</button>}
+          {["brand", "manager"].includes(role) && <button className={`nav-button ${page === "brand" ? "active" : ""}`} onClick={() => go("brand")}>Кабинет бренда</button>}
           {role === "admin" && <button className={`nav-button ${page === "admin" ? "active" : ""}`} onClick={() => go("admin")}>Админ-панель</button>}
         </nav>
         <div className="top-actions">
@@ -348,7 +357,7 @@ function Header({ page, role, navigate, logout }) {
             </>
           ) : (
             <>
-              <button className="button secondary small" onClick={() => go(role)}>Кабинет</button>
+              <button className="button secondary small" onClick={() => go(cabinetPage)}>Кабинет</button>
               <button className="button ghost small" onClick={logout}>Выйти</button>
             </>
           )}
@@ -365,13 +374,60 @@ function Header({ page, role, navigate, logout }) {
       {mobileOpen && (
         <div className="mobile-drawer">
           <button className="button secondary" onClick={() => go("catalog")}>Каталог офферов</button>
-          <button className="button secondary" onClick={() => go(role === "guest" ? "register" : role)}>Кабинет</button>
+          <button className="button secondary" onClick={() => go(role === "guest" ? "register" : cabinetPage)}>Кабинет</button>
           {role === "guest"
             ? <button className="button" onClick={() => go("login")}>Войти</button>
             : <button className="button ghost" onClick={logout}>Выйти</button>}
         </div>
       )}
     </header>
+  );
+}
+
+function ManagerBrandSelector({ brands, activeBrandId, onSelect, compact = false }) {
+  if (!brands.length) {
+    return (
+      <main className="dashboard-main">
+        <div className="container">
+          <div className="panel empty-state">
+            У вас пока нет активных назначений на бренды.
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  const selector = (
+    <label className="manager-brand-select">
+      <span>{compact ? "Активный бренд" : "Выберите бренд для работы"}</span>
+      <select
+        value={activeBrandId || ""}
+        onChange={(event) => event.target.value && onSelect(event.target.value)}
+      >
+        {!activeBrandId && <option value="">Выберите бренд</option>}
+        {brands.map((brand) => (
+          <option key={brand.id} value={brand.id}>
+            {brand.brandName || brand.legalName || brand.id}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+
+  if (compact) {
+    return <div className="container manager-brand-context">{selector}</div>;
+  }
+
+  return (
+    <main className="dashboard-main">
+      <div className="container">
+        <div className="panel manager-brand-selector">
+          <h1>Выберите бренд</h1>
+          <p>Активный бренд определяет данные и действия в кабинете.</p>
+          {selector}
+        </div>
+      </div>
+    </main>
   );
 }
 
@@ -1757,7 +1813,7 @@ function BrandDashboard({ user, offers, applications, relationships, finance, or
         <>
           <div className="dashboard-header">
             <div>
-              <h1>Бренд LUNEA</h1>
+              <h1>Бренд {user?.profile?.brandName || "без названия"}</h1>
               <p>Управление офферами и заявками креаторов.</p>
             </div>
             <button className="button" onClick={() => navigate("create")}>＋ Создать оффер</button>
@@ -2327,6 +2383,9 @@ function App() {
   const [adminBrands, setAdminBrands] = useState([]);
   const [operationalReadiness, setOperationalReadiness] = useState(null);
   const [orderImportPreview, setOrderImportPreview] = useState(null);
+  const [managerBrands, setManagerBrands] = useState([]);
+  const [activeBrandId, setActiveBrandId] = useState(null);
+  const [activeBrandProfile, setActiveBrandProfile] = useState(null);
   const [toast, setToast] = useState("");
   const [sessionReady, setSessionReady] = useState(false);
 
@@ -2343,14 +2402,15 @@ function App() {
   const roleFromUser = (nextUser) => nextUser?.role?.toLowerCase() || "guest";
 
   const canOpen = (target, currentRole = role) => {
-    if (["brand", "create"].includes(target)) return currentRole === "brand";
+    if (["brand", "create"].includes(target)) return ["brand", "manager"].includes(currentRole);
+    if (target === "manager") return currentRole === "manager";
     if (target === "creator") return currentRole === "creator";
     if (target === "admin") return currentRole === "admin";
     return true;
   };
 
   const loadFinance = async (currentRole) => {
-    if (currentRole === "brand") {
+    if (["brand", "manager"].includes(currentRole)) {
       const [ordersData, commissionsData, analyticsData, creatorAnalyticsData] = await Promise.all([
         api("/brand/orders?pageSize=100"),
         api("/brand/commissions?pageSize=100"),
@@ -2397,7 +2457,7 @@ function App() {
   };
 
   const loadOffers = async (currentRole = role) => {
-    if (currentRole === "brand") {
+    if (["brand", "manager"].includes(currentRole)) {
       const data = await api("/brand/offers");
       const mapped = await Promise.all(data.map(async (offer) => {
         const kit = await api(`/brand/offers/${offer.id}/creator-kit`);
@@ -2456,6 +2516,88 @@ function App() {
     }
   };
 
+  const clearManagerBrandContext = (managerUserId, forgetSelection = false) => {
+    setApiActiveBrandId(null);
+    setActiveBrandId(null);
+    setActiveBrandProfile(null);
+    setManagerBrands([]);
+    if (forgetSelection && managerUserId) {
+      try {
+        window.sessionStorage.removeItem(managerBrandStorageKey(managerUserId));
+      } catch {
+        // Session storage is optional; in-memory context is still cleared.
+      }
+    }
+  };
+
+  const activateManagerBrand = async (managerUser, brandId, brands = managerBrands) => {
+    const selectedBrand = brands.find((brand) => brand.id === brandId);
+    if (!managerUser || !selectedBrand) throw new Error("Бренд больше не доступен");
+
+    setApiActiveBrandId(brandId);
+    try {
+      const brandProfile = await api("/brands/me");
+      setActiveBrandId(brandId);
+      setActiveBrandProfile(brandProfile);
+      try {
+        window.sessionStorage.setItem(managerBrandStorageKey(managerUser.id), brandId);
+      } catch {
+        // The active context remains available for the current page session.
+      }
+      await loadOffers("manager");
+      return selectedBrand;
+    } catch (error) {
+      setApiActiveBrandId(null);
+      setActiveBrandId(null);
+      setActiveBrandProfile(null);
+      try {
+        window.sessionStorage.removeItem(managerBrandStorageKey(managerUser.id));
+      } catch {
+        // Ignore unavailable session storage while clearing invalid context.
+      }
+      throw error;
+    }
+  };
+
+  const initializeManagerBrandContext = async (managerUser) => {
+    setApiActiveBrandId(null);
+    setActiveBrandId(null);
+    setActiveBrandProfile(null);
+
+    const brands = await api("/manager/brands");
+    setManagerBrands(brands);
+
+    let storedBrandId = null;
+    try {
+      storedBrandId = window.sessionStorage.getItem(managerBrandStorageKey(managerUser.id));
+    } catch {
+      // Continue without persistence when session storage is unavailable.
+    }
+
+    const selectedBrandId = brands.length === 1
+      ? brands[0].id
+      : brands.some((brand) => brand.id === storedBrandId)
+        ? storedBrandId
+        : null;
+
+    if (!selectedBrandId) {
+      await loadOffers("guest");
+      return null;
+    }
+
+    await activateManagerBrand(managerUser, selectedBrandId, brands);
+    return selectedBrandId;
+  };
+
+  const selectManagerBrand = async (brandId) => {
+    try {
+      await activateManagerBrand(user, brandId);
+      navigate("brand", { asRole: "manager" });
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
   useEffect(() => {
     let active = true;
     restoreSession().then(async (restoredUser) => {
@@ -2463,15 +2605,31 @@ function App() {
       const restoredRole = roleFromUser(restoredUser);
       setUser(restoredUser);
       setRole(restoredRole);
+      let restoredBrandId = null;
       if (restoredUser) {
         try {
-          await loadOffers(restoredRole);
+          if (restoredRole === "manager") {
+            restoredBrandId = await initializeManagerBrandContext(restoredUser);
+          } else {
+            clearManagerBrandContext();
+            await loadOffers(restoredRole);
+          }
         } catch (error) {
           notify(error.message);
         }
       }
-      const requested = window.location.hash.replace("#", "") || "home";
-      const initialPage = pageTitles[requested] && canOpen(requested, restoredRole) ? requested : (pageTitles[requested] ? "login" : "home");
+      const requestedHash = window.location.hash.replace("#", "");
+      const managerDefault = restoredBrandId ? "brand" : "manager";
+      const requested = requestedHash || (restoredRole === "manager" ? managerDefault : "home");
+      const initialPage = restoredRole === "manager" && requested === "manager" && restoredBrandId
+        ? "brand"
+        : pageTitles[requested] && canOpen(requested, restoredRole)
+          ? requested
+          : pageTitles[requested]
+            ? "login"
+            : restoredRole === "manager"
+              ? managerDefault
+              : "home";
       setPage(initialPage);
       if (initialPage !== requested) window.history.replaceState({ page: initialPage }, "", `#${initialPage}`);
       setSessionReady(true);
@@ -2504,6 +2662,7 @@ function App() {
           name
         })
       });
+      clearManagerBrandContext(user?.id, role === "manager");
       setAccessToken(result.accessToken);
       setRole(newRole);
       if (newRole === "brand" && form.website) {
@@ -2534,13 +2693,17 @@ function App() {
         body: JSON.stringify(form)
       });
       if (result.mfaRequired) return result;
+      clearManagerBrandContext(user?.id, role === "manager");
       setAccessToken(result.accessToken);
       const nextRole = roleFromUser(result.user);
       setRole(nextRole);
-      setUser(await api("/auth/me"));
-      await loadOffers(nextRole);
+      const nextUser = await api("/auth/me");
+      setUser(nextUser);
+      const selectedBrandId = nextRole === "manager"
+        ? await initializeManagerBrandContext(nextUser)
+        : await loadOffers(nextRole).then(() => null);
       notify("Вход выполнен");
-      navigate(nextRole, { asRole: nextRole });
+      navigate(nextRole === "manager" && selectedBrandId ? "brand" : nextRole, { asRole: nextRole });
       return null;
     } catch (error) {
       notify(error.message);
@@ -2554,6 +2717,7 @@ function App() {
         method: "POST",
         body: JSON.stringify({ challengeToken, code })
       });
+      clearManagerBrandContext(user?.id, role === "manager");
       setAccessToken(result.accessToken);
       const nextRole = roleFromUser(result.user);
       setRole(nextRole);
@@ -2572,6 +2736,7 @@ function App() {
     } catch {
       // Локальное завершение сессии выполняется даже при недоступном сервере.
     }
+    clearManagerBrandContext(user?.id, role === "manager");
     setAccessToken(null);
     setUser(null);
     setRole("guest");
@@ -2858,11 +3023,23 @@ function App() {
     return mapCreatorKit(kit, offer);
   };
 
+  const brandDashboardUser = role === "manager"
+    ? { ...user, profile: activeBrandProfile }
+    : user;
+
   if (!sessionReady) return <div className="app"><main className="auth-main"><div className="auth-panel"><h2>Загрузка сессии…</h2></div></main></div>;
 
   return (
     <div className="app">
       {!["register", "login"].includes(page) && <Header page={page} role={role} navigate={navigate} logout={logout} />}
+      {role === "manager" && activeBrandId && managerBrands.length > 1 && ["brand", "create"].includes(page) && (
+        <ManagerBrandSelector
+          brands={managerBrands}
+          activeBrandId={activeBrandId}
+          onSelect={selectManagerBrand}
+          compact
+        />
+      )}
       {page === "home" && <HomePage offers={offers.filter((offer) => offer.status === "active")} navigate={navigate} openOffer={openOffer} />}
       {page === "catalog" && <CatalogPage offers={offers} openOffer={openOffer} navigate={navigate} />}
       {page === "offer" && selectedOffer && <OfferPage offer={selectedOffer} applicationStatus={(applications.find((item) => item.offerId === selectedOffer.id)?.status || "NONE").toLowerCase()} role={role} apply={apply} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} />}
@@ -2870,7 +3047,9 @@ function App() {
       {page === "login" && <LoginPage login={login} verifyMfa={verifyMfa} navigate={navigate} />}
       {page === "creator" && role === "creator" && <CreatorDashboard user={user} applications={applications} relationships={relationships} offers={offers} finance={creatorFinance} cancelApplication={cancelApplication} copyValue={copyValue} navigate={navigate} />}
       {page === "brand" && role === "brand" && <BrandDashboard user={user} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} />}
-      {page === "create" && role === "brand" && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} />}
+      {["manager", "brand", "create"].includes(page) && role === "manager" && !activeBrandId && <ManagerBrandSelector brands={managerBrands} activeBrandId={activeBrandId} onSelect={selectManagerBrand} />}
+      {page === "brand" && role === "manager" && activeBrandId && <BrandDashboard user={brandDashboardUser} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} />}
+      {page === "create" && ["brand", "manager"].includes(role) && (role !== "manager" || activeBrandId) && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} />}
       {page === "admin" && role === "admin" && <AdminDashboard user={user} offers={offers} brands={adminBrands} operationalReadiness={operationalReadiness} finance={adminFinance} createPayout={createPayout} approvePayout={approvePayout} markPayoutPaid={markPayoutPaid} cancelPayout={cancelPayout} verifyBrand={verifyBrand} changeAdminPassword={changeAdminPassword} beginAdminMfa={beginAdminMfa} confirmAdminMfa={confirmAdminMfa} />}
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>

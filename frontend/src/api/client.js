@@ -1,6 +1,7 @@
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
 
 let accessToken = null;
+let activeBrandId = null;
 let refreshPromise = null;
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
@@ -15,6 +16,14 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
 
 export function setAccessToken(token) {
   accessToken = token;
+}
+
+export function setActiveBrandId(brandId) {
+  activeBrandId = brandId || null;
+}
+
+function isBrandScopedPath(path) {
+  return path === '/brands/me' || path.startsWith('/brand/');
 }
 
 async function parseResponse(response) {
@@ -58,6 +67,9 @@ export async function api(path, options = {}, retry = true) {
     headers.set('Content-Type', 'application/json');
   }
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
+  if (activeBrandId && isBrandScopedPath(path)) {
+    headers.set('X-Active-Brand-Id', activeBrandId);
+  }
   const response = await fetchWithTimeout(`${API_URL}${path}`, {
     ...options,
     headers,

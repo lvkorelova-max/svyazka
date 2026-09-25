@@ -1099,6 +1099,45 @@ p {
   background: var(--paper);
 }
 
+.manager-brand-context {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 18px;
+}
+
+.manager-brand-selector {
+  max-width: 560px;
+  margin: 56px auto;
+  padding: 28px;
+}
+
+.manager-brand-selector h1 {
+  margin-bottom: 8px;
+}
+
+.manager-brand-selector p {
+  margin-bottom: 24px;
+  color: var(--muted);
+}
+
+.manager-brand-select {
+  display: grid;
+  width: min(100%, 360px);
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.manager-brand-select select {
+  min-height: 42px;
+  padding: 0 38px 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
 .panel-header {
   display: flex;
   min-height: 66px;
