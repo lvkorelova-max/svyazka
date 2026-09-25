@@ -1138,6 +1138,35 @@ p {
   color: var(--ink);
 }
 
+.team-invite-form {
+  overflow: hidden;
+}
+
+.team-invitation-created {
+  display: grid;
+  gap: 14px;
+  padding: 20px 22px;
+  background: var(--accent-soft);
+}
+
+.team-invitation-created strong,
+.team-invitation-created span {
+  display: block;
+}
+
+.team-invitation-created span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.team-invitation-link {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
 .panel-header {
   display: flex;
   min-height: 66px;

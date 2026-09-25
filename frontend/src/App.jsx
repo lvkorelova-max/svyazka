@@ -1778,24 +1778,191 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
   );
 }
 
-function BrandDashboard({ user, offers, applications, relationships, finance, orderImportPreview, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview, transitionOffer, onUploadOrders, onConfirmOrders }) {
+function BrandTeamPanel({ managers, invitations, onInvite, onRevokeInvitation, onRemoveManager, notify }) {
+  const [showInviteForm, setShowInviteForm] = useState(false);
+  const [inviteForm, setInviteForm] = useState({ displayName: "", email: "" });
+  const [createdInvitation, setCreatedInvitation] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const submitInvitation = async (event) => {
+    event.preventDefault();
+    setSubmitting(true);
+    try {
+      const invitation = await onInvite(inviteForm);
+      setCreatedInvitation(invitation);
+      setInviteForm({ displayName: "", email: "" });
+      setShowInviteForm(false);
+    } catch {
+      // Parent action reports the API error.
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const copyInvitationLink = async () => {
+    if (!createdInvitation?.invitationUrl) return;
+    try {
+      await navigator.clipboard?.writeText(createdInvitation.invitationUrl);
+      notify("Ссылка приглашения скопирована");
+    } catch {
+      notify("Не удалось скопировать ссылку");
+    }
+  };
+
+  const confirmRemove = (manager) => {
+    const displayName = manager.manager?.managerProfile?.displayName || manager.manager?.email || "этого менеджера";
+    if (!window.confirm(`Удалить ${displayName} из команды? Его офферы и партнёры этого бренда станут неназначенными.`)) return;
+    onRemoveManager(manager.managerId);
+  };
+
+  return (
+    <div className="team-panel">
+      <div className="dashboard-header">
+        <div>
+          <h1>Команда</h1>
+          <p>Управляйте менеджерами бренда и приглашениями.</p>
+        </div>
+        <button className="button" onClick={() => setShowInviteForm((current) => !current)}>
+          {showInviteForm ? "Отмена" : "Пригласить менеджера"}
+        </button>
+      </div>
+
+      {showInviteForm && (
+        <form className="panel team-invite-form" onSubmit={submitInvitation}>
+          <div className="panel-header"><h2>Новое приглашение</h2></div>
+          <div className="panel-body form-grid">
+            <div className="form-group">
+              <label className="form-label">Имя менеджера</label>
+              <input
+                className="field"
+                value={inviteForm.displayName}
+                onChange={(event) => setInviteForm((current) => ({ ...current, displayName: event.target.value }))}
+                required
+                minLength={2}
+                maxLength={160}
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Email</label>
+              <input
+                className="field"
+                type="email"
+                value={inviteForm.email}
+                onChange={(event) => setInviteForm((current) => ({ ...current, email: event.target.value }))}
+                required
+                maxLength={320}
+              />
+            </div>
+          </div>
+          <div className="form-actions">
+            <button className="button" type="submit" disabled={submitting}>
+              {submitting ? "Создание…" : "Создать приглашение"}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {createdInvitation && (
+        <div className="panel team-invitation-created">
+          <div>
+            <strong>Приглашение создано</strong>
+            <span>Скопируйте ссылку и отправьте её менеджеру вручную.</span>
+          </div>
+          <div className="team-invitation-link">
+            <input className="field" value={createdInvitation.invitationUrl} readOnly />
+            <button className="button secondary small" onClick={copyInvitationLink}>Скопировать ссылку</button>
+          </div>
+        </div>
+      )}
+
+      <div className="panel">
+        <div className="panel-header"><h2>Активные менеджеры</h2></div>
+        {managers.length ? (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Менеджер</th><th>Email</th><th>Назначен</th><th></th></tr></thead>
+              <tbody>
+                {managers.map((assignment) => (
+                  <tr key={assignment.id}>
+                    <td>
+                      <span className="table-title">{assignment.manager?.managerProfile?.displayName || "Без имени"}</span>
+                      <span className="table-subtitle">{assignment.manager?.status === "ACTIVE" ? "Активный аккаунт" : "Аккаунт недоступен"}</span>
+                    </td>
+                    <td>{assignment.manager?.email || "—"}</td>
+                    <td>{assignment.assignedAt ? new Date(assignment.assignedAt).toLocaleDateString("ru-RU") : "—"}</td>
+                    <td>
+                      <div className="row-actions">
+                        <button className="button ghost small" onClick={() => confirmRemove(assignment)}>Удалить</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : <div className="empty-state">Активных менеджеров пока нет.</div>}
+      </div>
+
+      <div className="panel">
+        <div className="panel-header"><h2>Приглашения</h2></div>
+        {invitations.length ? (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Получатель</th><th>Статус</th><th>Создано</th><th>Истекает</th><th></th></tr></thead>
+              <tbody>
+                {invitations.map((invitation) => (
+                  <tr key={invitation.id}>
+                    <td><span className="table-title">{invitation.displayName}</span><span className="table-subtitle">{invitation.email}</span></td>
+                    <td><Status type={invitation.status === "PENDING" ? "pending" : invitation.status === "ACCEPTED" ? "success" : "danger"}>{invitation.status === "PENDING" ? "Ожидает принятия" : invitation.status === "ACCEPTED" ? "Принято" : invitation.status === "EXPIRED" ? "Истекло" : "Отозвано"}</Status></td>
+                    <td>{invitation.createdAt ? new Date(invitation.createdAt).toLocaleDateString("ru-RU") : "—"}</td>
+                    <td>{invitation.expiresAt ? new Date(invitation.expiresAt).toLocaleDateString("ru-RU") : "—"}</td>
+                    <td>
+                      {invitation.status === "PENDING" && (
+                        <div className="row-actions">
+                          <button className="button ghost small" onClick={() => onRevokeInvitation(invitation.id)}>Отозвать</button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : <div className="empty-state">Приглашений пока нет.</div>}
+      </div>
+    </div>
+  );
+}
+
+function BrandDashboard({ user, offers, applications, relationships, finance, orderImportPreview, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview, transitionOffer, onUploadOrders, onConfirmOrders, canManageTeam, teamManagers, teamInvitations, onInviteManager, onRevokeInvitation, onRemoveManager }) {
   const [tab, setTab] = useState("offers");
+  const items = [
+    { id: "offers", label: "Офферы" },
+    { id: "applications", label: "Заявки" },
+    { id: "partners", label: "Партнёры" },
+    { id: "sales", label: "Продажи" },
+    { id: "creatorKit", label: "Creator Kit" },
+    { id: "tracking", label: "Отслеживание продаж" },
+    ...(canManageTeam ? [{ id: "team", label: "Команда" }] : [])
+  ];
 
   return (
     <DashboardLayout
       roleLabel="Кабинет бренда"
-      items={[
-        { id: "offers", label: "Офферы" },
-        { id: "applications", label: "Заявки" },
-        { id: "partners", label: "Партнёры" },
-        { id: "sales", label: "Продажи" },
-        { id: "creatorKit", label: "Creator Kit" },
-        { id: "tracking", label: "Отслеживание продаж" }
-      ]}
+      items={items}
       active={tab}
       setActive={setTab}
     >
-      {tab === "tracking" ? (
+      {tab === "team" && canManageTeam ? (
+        <BrandTeamPanel
+          managers={teamManagers}
+          invitations={teamInvitations}
+          onInvite={onInviteManager}
+          onRevokeInvitation={onRevokeInvitation}
+          onRemoveManager={onRemoveManager}
+          notify={notify}
+        />
+      ) : tab === "tracking" ? (
         <div className="dashboard-header">
           <div>
             <h1>Подключение отслеживания продаж</h1>
@@ -2386,6 +2553,8 @@ function App() {
   const [managerBrands, setManagerBrands] = useState([]);
   const [activeBrandId, setActiveBrandId] = useState(null);
   const [activeBrandProfile, setActiveBrandProfile] = useState(null);
+  const [teamManagers, setTeamManagers] = useState([]);
+  const [teamInvitations, setTeamInvitations] = useState([]);
   const [toast, setToast] = useState("");
   const [sessionReady, setSessionReady] = useState(false);
 
@@ -2440,6 +2609,15 @@ function App() {
     }
   };
 
+  const loadBrandTeam = async () => {
+    const [managersData, invitationsData] = await Promise.all([
+      api("/brand/team/managers"),
+      api("/brand/team/invitations")
+    ]);
+    setTeamManagers(managersData);
+    setTeamInvitations(invitationsData);
+  };
+
   const navigate = (target, options = {}) => {
     if (options.role) setRegisterRole(options.role);
     if (options.offerId) setSelectedOfferId(options.offerId);
@@ -2458,6 +2636,9 @@ function App() {
 
   const loadOffers = async (currentRole = role) => {
     if (["brand", "manager"].includes(currentRole)) {
+      if (currentRole === "brand") {
+        await loadBrandTeam();
+      }
       const data = await api("/brand/offers");
       const mapped = await Promise.all(data.map(async (offer) => {
         const kit = await api(`/brand/offers/${offer.id}/creator-kit`);
@@ -2521,6 +2702,8 @@ function App() {
     setActiveBrandId(null);
     setActiveBrandProfile(null);
     setManagerBrands([]);
+    setTeamManagers([]);
+    setTeamInvitations([]);
     if (forgetSelection && managerUserId) {
       try {
         window.sessionStorage.removeItem(managerBrandStorageKey(managerUserId));
@@ -2593,6 +2776,41 @@ function App() {
     try {
       await activateManagerBrand(user, brandId);
       navigate("brand", { asRole: "manager" });
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const inviteManager = async (payload) => {
+    try {
+      const invitation = await api("/brand/team/invitations", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      setTeamInvitations((current) => [invitation, ...current]);
+      notify("Приглашение создано");
+      return invitation;
+    } catch (error) {
+      notify(error.message);
+      throw error;
+    }
+  };
+
+  const revokeInvitation = async (invitationId) => {
+    try {
+      await api(`/brand/team/invitations/${invitationId}`, { method: "DELETE" });
+      setTeamInvitations((current) => current.map((item) => item.id === invitationId ? { ...item, status: "REVOKED", revokedAt: new Date().toISOString() } : item));
+      notify("Приглашение отозвано");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const removeManager = async (managerId) => {
+    try {
+      await api(`/brand/team/managers/${managerId}`, { method: "DELETE" });
+      setTeamManagers((current) => current.filter((item) => item.managerId !== managerId));
+      notify("Менеджер удалён из команды");
     } catch (error) {
       notify(error.message);
     }
@@ -3046,7 +3264,7 @@ function App() {
       {page === "register" && <RegisterPage presetRole={registerRole} complete={completeRegistration} navigate={navigate} />}
       {page === "login" && <LoginPage login={login} verifyMfa={verifyMfa} navigate={navigate} />}
       {page === "creator" && role === "creator" && <CreatorDashboard user={user} applications={applications} relationships={relationships} offers={offers} finance={creatorFinance} cancelApplication={cancelApplication} copyValue={copyValue} navigate={navigate} />}
-      {page === "brand" && role === "brand" && <BrandDashboard user={user} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} />}
+      {page === "brand" && role === "brand" && <BrandDashboard user={user} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} canManageTeam teamManagers={teamManagers} teamInvitations={teamInvitations} onInviteManager={inviteManager} onRevokeInvitation={revokeInvitation} onRemoveManager={removeManager} />}
       {["manager", "brand", "create"].includes(page) && role === "manager" && !activeBrandId && <ManagerBrandSelector brands={managerBrands} activeBrandId={activeBrandId} onSelect={selectManagerBrand} />}
       {page === "brand" && role === "manager" && activeBrandId && <BrandDashboard user={brandDashboardUser} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} />}
       {page === "create" && ["brand", "manager"].includes(role) && (role !== "manager" || activeBrandId) && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} />}
