@@ -11,6 +11,7 @@ enum UserRole {
   BRAND
   CREATOR
   ADMIN
+  MANAGER
 }
 
 enum UserStatus {
@@ -196,6 +197,7 @@ model User {
   mfaEnrolledAt        DateTime?
   brandProfile         BrandProfile?
   creatorProfile       CreatorProfile?
+  managerProfile       ManagerProfile?
   sessions             AuthSession[]
   passwordResetTokens  PasswordResetToken[]
   adminRecoveryCodes   AdminRecoveryCode[]
@@ -206,11 +208,28 @@ model User {
   payoutsPaid          Payout[]           @relation("PayoutPaidBy")
   payoutsCancelled     Payout[]           @relation("PayoutCancelledBy")
   brandsVerified       BrandProfile[]     @relation("BrandVerifier")
+  brandManagerAssignments BrandManagerAssignment[] @relation("BrandManager")
+  assignmentsCreated    BrandManagerAssignment[] @relation("AssignmentCreatedBy")
+  assignmentsRemoved    BrandManagerAssignment[] @relation("AssignmentRemovedBy")
+  offersCreated         Offer[]            @relation("OfferCreatedByManager")
+  offersResponsible     Offer[]            @relation("OfferCurrentManager")
+  relationshipsResponsible AffiliateRelationship[] @relation("RelationshipCurrentManager")
+  attributedOrders      Order[]            @relation("OrderAttributionManager")
   createdAt            DateTime           @default(now())
   updatedAt            DateTime           @updatedAt
 
   @@index([role, status])
   @@index([lockedUntil])
+}
+
+model ManagerProfile {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @unique @db.Uuid
+  displayName String   @db.VarChar(160)
+  jobTitle    String?  @db.VarChar(160)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 model BrandProfile {
@@ -229,6 +248,7 @@ model BrandProfile {
   offers             Offer[]
   orderImports       OrderImport[]
   orders             Order[]
+  managerAssignments BrandManagerAssignment[]
   createdAt          DateTime                @default(now())
   updatedAt          DateTime                @updatedAt
 
@@ -269,6 +289,10 @@ model Offer {
   productRequirementSales Int                     @default(0)
   allowedPromotionFormats String[]                @default([])
   brand                   BrandProfile            @relation(fields: [brandId], references: [id], onDelete: Restrict)
+  createdByManagerId      String?                 @db.Uuid
+  currentManagerId        String?                 @db.Uuid
+  createdByManager        User?                   @relation("OfferCreatedByManager", fields: [createdByManagerId], references: [id], onDelete: SetNull)
+  currentManager          User?                   @relation("OfferCurrentManager", fields: [currentManagerId], references: [id], onDelete: SetNull)
   creatorKit              CreatorKit?
   applications            OfferApplication[]
   affiliateRelationships  AffiliateRelationship[]
@@ -280,6 +304,8 @@ model Offer {
 
   @@index([brandId, status])
   @@index([status, createdAt])
+  @@index([createdByManagerId])
+  @@index([currentManagerId])
 }
 
 model CreatorKit {
@@ -433,11 +459,14 @@ model AffiliateRelationship {
   orders         Order[]
   commissions    Commission[]
   importRows     OrderImportRow[]
+  currentManagerId String?                   @db.Uuid
+  currentManager User?                       @relation("RelationshipCurrentManager", fields: [currentManagerId], references: [id], onDelete: SetNull)
   createdAt      DateTime                    @default(now())
   updatedAt      DateTime                    @updatedAt
 
   @@index([creatorId, status, createdAt])
   @@index([offerId, status, createdAt])
+  @@index([currentManagerId])
 }
 
 model Click {
@@ -551,12 +580,32 @@ model Order {
   createdAt               DateTime               @default(now())
   updatedAt               DateTime               @updatedAt
   ledgerEntries           LedgerEntry[]
+  managerIdAtAttribution String?                @db.Uuid
+  managerAtAttribution   User?                  @relation("OrderAttributionManager", fields: [managerIdAtAttribution], references: [id], onDelete: SetNull)
 
   @@unique([brandId, externalOrderId])
   @@index([brandId, orderDate])
   @@index([offerId, orderDate])
   @@index([affiliateRelationshipId, orderDate])
   @@index([clickId])
+  @@index([managerIdAtAttribution])
+}
+
+model BrandManagerAssignment {
+  id         String        @id @default(uuid()) @db.Uuid
+  brandId    String        @db.Uuid
+  managerId  String        @db.Uuid
+  assignedAt DateTime      @default(now())
+  removedAt  DateTime?
+  assignedBy String?       @db.Uuid
+  removedBy  String?       @db.Uuid
+  brand      BrandProfile  @relation(fields: [brandId], references: [id], onDelete: Restrict)
+  manager    User          @relation("BrandManager", fields: [managerId], references: [id], onDelete: Restrict)
+  assigner   User?         @relation("AssignmentCreatedBy", fields: [assignedBy], references: [id], onDelete: SetNull)
+  remover    User?         @relation("AssignmentRemovedBy", fields: [removedBy], references: [id], onDelete: SetNull)
+
+  @@index([brandId, removedAt])
+  @@index([managerId, removedAt])
 }
 
 model Commission {

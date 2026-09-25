@@ -11,6 +11,8 @@ import { StorageModule } from './storage/storage.module';
 import { AuditModule } from './audit/audit.module';
 import { SecurityModule } from './common/security.module';
 import { HealthModule } from './health/health.module';
+import { BrandAccessModule } from './brand-access/brand-access.module';
+import { ManagerModule } from './manager/manager.module';
 
 @Module({
   imports: [
@@ -50,7 +52,9 @@ import { HealthModule } from './health/health.module';
     SecurityModule,
     StorageModule,
     HealthModule,
+    BrandAccessModule,
     AuthModule,
+    ManagerModule,
     CreatorKitModule,
     ProfilesModule,
     OffersModule,

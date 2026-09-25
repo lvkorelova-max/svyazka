@@ -168,11 +168,11 @@ export class AuthService {
   async me(userId: string) {
     const user = await this.prisma.user.findUniqueOrThrow({
       where: { id: userId },
-      include: { brandProfile: true, creatorProfile: true },
+      include: { brandProfile: true, creatorProfile: true, managerProfile: true },
     });
     return {
       ...this.publicUser(user),
-      profile: user.brandProfile ?? user.creatorProfile ?? null,
+      profile: user.brandProfile ?? user.creatorProfile ?? user.managerProfile ?? null,
     };
   }
 
