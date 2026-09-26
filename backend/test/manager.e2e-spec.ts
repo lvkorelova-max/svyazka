@@ -332,6 +332,19 @@ describe('Manager access and responsibility end-to-end', () => {
       .get('/api/brand/offers')
       .set(managerHeaders(annaToken, brandBId))
       .expect(200);
+    const team = await request(app.getHttpServer())
+      .get('/api/brand/team/managers')
+      .set(managerHeaders(annaToken, brandBId))
+      .expect(200);
+    expect(team.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ managerId: annaId, active: true }),
+      ]),
+    );
+    await request(app.getHttpServer())
+      .post(`/api/brand/team/managers/${charlieId}`)
+      .set(managerHeaders(annaToken, brandBId))
+      .expect(403);
   });
 
   it('allows BRAND to manage only its own team and preserves assignment periods', async () => {
@@ -456,6 +469,18 @@ describe('Manager access and responsibility end-to-end', () => {
       createdByManagerId: annaId,
       currentManagerId: annaId,
     });
+
+    const brandTransfer = await request(app.getHttpServer())
+      .patch(`/api/brand/offers/${offerId}/responsibility`)
+      .set(auth(brandAToken))
+      .send({ managerId: mariaId })
+      .expect(200);
+    expect(brandTransfer.body).toEqual(
+      expect.objectContaining({
+        currentManagerId: mariaId,
+        currentManager: { id: mariaId, displayName: 'manager-maria@example.test' },
+      }),
+    );
 
     await transferOffer(annaToken, brandAId, mariaId);
     expect(

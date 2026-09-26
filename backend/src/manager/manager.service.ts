@@ -54,6 +54,10 @@ export class ManagerService {
     return this.listActiveBrandManagers(brand.id);
   }
 
+  listActiveBrandManagersForManager(brandId: string) {
+    return this.listActiveBrandManagers(brandId);
+  }
+
   private async listActiveBrandManagers(brandId: string) {
     const assignments = await this.prisma.brandManagerAssignment.findMany({
       where: { brandId, removedAt: null },

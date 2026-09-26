@@ -104,7 +104,10 @@ describe('OffersService manager brand authorization', () => {
     expect(prisma.offer.update).toHaveBeenCalledWith({
       where: { id: 'offer-a' },
       data: { currentManagerId: 'manager-b' },
-      include: { brand: true },
+      include: expect.objectContaining({
+        brand: true,
+        currentManager: expect.any(Object),
+      }),
     });
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -112,5 +115,28 @@ describe('OffersService manager brand authorization', () => {
         metadata: { previousManagerId: 'manager-a', newManagerId: 'manager-b' },
       }),
     );
+  });
+
+  it('returns the current manager identity without exposing the nested profile relation', async () => {
+    (brands.resolveBrand as jest.Mock).mockResolvedValue({ id: 'brand-a' });
+    prisma.offer.findMany.mockResolvedValue([
+      {
+        id: 'offer-a',
+        brandId: 'brand-a',
+        currentManagerId: 'manager-a',
+        currentManager: {
+          id: 'manager-a',
+          managerProfile: { displayName: 'Manager A' },
+        },
+      },
+    ]);
+    const service = new OffersService(prisma, config, audit, brands);
+
+    await expect(service.listOwn('manager-a', 'brand-a')).resolves.toEqual([
+      expect.objectContaining({
+        currentManagerId: 'manager-a',
+        currentManager: { id: 'manager-a', displayName: 'Manager A' },
+      }),
+    ]);
   });
 });

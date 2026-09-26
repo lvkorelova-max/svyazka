@@ -16,6 +16,8 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { AccessTokenGuard } from '../common/guards/access-token.guard';
 import { AdminSecurityGuard } from '../common/guards/admin-security.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { BrandContextGuard } from '../brand-access/brand-context.guard';
+import { ActiveBrandId } from '../brand-access/brand-context';
 import { UpdateManagerProfileDto } from './dto/update-manager-profile.dto';
 import { ManagerService } from './manager.service';
 
@@ -46,9 +48,15 @@ export class ManagerController {
   }
 
   @Get('brand/team/managers')
-  @Roles(UserRole.BRAND)
-  listOwnBrandManagers(@CurrentUser() brand: AuthenticatedUser) {
-    return this.managers.listOwnBrandManagers(brand.id);
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
+  @UseGuards(BrandContextGuard)
+  listOwnBrandManagers(
+    @CurrentUser() user: AuthenticatedUser,
+    @ActiveBrandId() activeBrandId?: string,
+  ) {
+    return user.role === UserRole.MANAGER
+      ? this.managers.listActiveBrandManagersForManager(activeBrandId as string)
+      : this.managers.listOwnBrandManagers(user.id);
   }
 
   @Post('brand/team/managers/:managerId')

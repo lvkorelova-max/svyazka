@@ -197,6 +197,36 @@ describe('ManagerService', () => {
     );
   });
 
+  it('lists active managers for a validated MANAGER brand context', async () => {
+    prisma.brandManagerAssignment.findMany.mockResolvedValue([
+      {
+        id: 'assignment-a',
+        managerId: 'manager-a',
+        assignedAt: new Date('2026-09-25T02:00:00Z'),
+        removedAt: null,
+        manager: {
+          id: 'manager-a',
+          email: 'manager-a@example.test',
+          status: UserStatus.ACTIVE,
+          managerProfile: { displayName: 'Manager A', jobTitle: null },
+        },
+      },
+    ]);
+
+    await expect(
+      new ManagerService(prisma, audit).listActiveBrandManagersForManager('brand-a'),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: 'assignment-a',
+        managerId: 'manager-a',
+        active: true,
+      }),
+    ]);
+    expect(prisma.brandManagerAssignment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { brandId: 'brand-a', removedAt: null } }),
+    );
+  });
+
   it('uses the authenticated BRAND as assignment actor for its own team', async () => {
     prisma.brandProfile.findUnique.mockResolvedValue({ id: 'brand-a', userId: 'brand-user' });
     prisma.user.findUnique.mockResolvedValue({

@@ -81,7 +81,7 @@ export class OffersController {
   }
 
   @Patch('brand/offers/:id/responsibility')
-  @Roles(UserRole.MANAGER)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   updateResponsibility(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) offerId: string,
