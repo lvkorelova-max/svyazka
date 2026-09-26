@@ -210,4 +210,34 @@ describe('OffersService manager brand authorization', () => {
       }),
     ]);
   });
+
+  it('lists only public fields for published guest offers', async () => {
+    prisma.offer.findMany.mockResolvedValue([
+      {
+        id: 'offer-a',
+        title: 'Public offer',
+        status: OfferStatus.PUBLISHED,
+        brand: { id: 'brand-a', brandName: 'Brand A' },
+      },
+    ]);
+    const service = new OffersService(prisma, config, audit, brands);
+
+    await expect(service.listPublicPublished()).resolves.toEqual([
+      expect.objectContaining({ id: 'offer-a', status: OfferStatus.PUBLISHED }),
+    ]);
+    expect(prisma.offer.findMany).toHaveBeenCalledWith({
+      where: { status: OfferStatus.PUBLISHED },
+      select: expect.objectContaining({
+        id: true,
+        title: true,
+        brand: expect.objectContaining({
+          select: expect.objectContaining({ brandName: true }),
+        }),
+      }),
+      orderBy: { createdAt: 'desc' },
+    });
+    const query = prisma.offer.findMany.mock.calls.at(-1)?.[0];
+    expect(query.select.currentManagerId).toBeUndefined();
+    expect(query.select.createdByManagerId).toBeUndefined();
+  });
 });

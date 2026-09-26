@@ -103,3 +103,13 @@ export class OffersController {
     return this.offers.getPublished(offerId);
   }
 }
+
+@Controller('public')
+export class PublicOffersController {
+  constructor(private readonly offers: OffersService) {}
+
+  @Get('offers')
+  listPublished() {
+    return this.offers.listPublicPublished();
+  }
+}

@@ -193,6 +193,36 @@ export class OffersService {
     return offers.map((offer) => this.withManagerIdentity(offer));
   }
 
+  async listPublicPublished() {
+    return this.prisma.offer.findMany({
+      where: { status: OfferStatus.PUBLISHED },
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        productUrl: true,
+        productPriceKopecks: true,
+        creatorCommissionBps: true,
+        promotionWithoutProduct: true,
+        category: true,
+        imageUrl: true,
+        productRequirementSales: true,
+        allowedPromotionFormats: true,
+        status: true,
+        brand: {
+          select: {
+            id: true,
+            brandName: true,
+            website: true,
+            description: true,
+            logoUrl: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
   async getPublished(offerId: string) {
     const offer = await this.prisma.offer.findFirst({
       where: { id: offerId, status: OfferStatus.PUBLISHED },

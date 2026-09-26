@@ -900,7 +900,7 @@ function OfferPage({ offer, applicationStatus, role, apply, navigate, notify, on
   const reward = Math.round(offer.price * offer.commission / 100);
   const action = () => {
     if (role !== "creator") {
-      navigate("register", { role: "creator" });
+      navigate("register", { role: "creator", offerId: offer.id });
       return;
     }
     if (applicationStatus === "none" || ["rejected", "cancelled"].includes(applicationStatus)) setApplicationOpen(true);
@@ -952,7 +952,7 @@ function OfferPage({ offer, applicationStatus, role, apply, navigate, notify, on
             </div>
             <div className="detail-list">
               <div className="detail-row"><span>Условия</span><strong>{offer.terms}</strong></div>
-              <div className="detail-row"><span>Creator Kit</span><strong>Digital Access · {offer.creatorKit.assets.filter((asset) => asset.active).length} материалов</strong></div>
+              <div className="detail-row"><span>Creator Kit</span><strong>{role === "guest" ? "Доступен после входа креатора" : `Digital Access · ${offer.creatorKit?.assets?.filter((asset) => asset.active).length || 0} материалов`}</strong></div>
               <div className="detail-row"><span>Начисление</span><strong>После подтверждения продажи</strong></div>
             </div>
             {applicationStatus === "pending" && <p><Status type="pending">Заявка на рассмотрении</Status></p>}
@@ -978,14 +978,16 @@ function OfferPage({ offer, applicationStatus, role, apply, navigate, notify, on
             </div>
           </div>
         )}
-        <CreatorKit
-          offer={offer}
-          mode="creator"
-          hasProductAccess={false}
-          notify={notify}
-          onToggleAsset={onToggleAsset}
-          onDownloadAsset={onDownloadAsset}
-        />
+        {role !== "guest" && (
+          <CreatorKit
+            offer={offer}
+            mode="creator"
+            hasProductAccess={false}
+            notify={notify}
+            onToggleAsset={onToggleAsset}
+            onDownloadAsset={onDownloadAsset}
+          />
+        )}
       </div>
     </main>
   );
@@ -3055,6 +3057,13 @@ function App() {
     }
   };
 
+  const loadPublicOffers = async () => {
+    const data = await api("/public/offers");
+    setOffers(data.map((offer) => ({ ...toUiOffer(offer), creatorKit: null })));
+    setApplications([]);
+    setRelationships([]);
+  };
+
   const clearManagerBrandContext = (managerUserId, forgetSelection = false) => {
     setApiActiveBrandId(null);
     setActiveBrandId(null);
@@ -3213,6 +3222,12 @@ function App() {
         } catch (error) {
           notify(error.message);
         }
+      } else {
+        try {
+          await loadPublicOffers();
+        } catch (error) {
+          notify(error.message);
+        }
       }
       const requestedHash = window.location.hash.replace("#", "");
       const managerDefault = restoredBrandId ? "brand" : "manager";
@@ -3276,7 +3291,10 @@ function App() {
       setUser(await api("/auth/me"));
       await loadOffers(newRole);
       notify("Аккаунт создан и сохранён");
-      navigate(newRole, { asRole: newRole });
+      navigate(
+        newRole === "creator" && selectedOfferId ? "offer" : newRole,
+        { asRole: newRole, offerId: selectedOfferId || undefined },
+      );
     } catch (error) {
       notify(error.message);
     }
@@ -3305,11 +3323,16 @@ function App() {
       } catch {
         // The URL-backed invitation flow can continue without session storage.
       }
-      navigate(pendingInvitationToken && nextRole === "manager"
-        ? "manager-invitation"
-        : nextRole === "manager" && selectedBrandId
-          ? "brand"
-          : nextRole, { asRole: nextRole });
+      navigate(
+        pendingInvitationToken && nextRole === "manager"
+          ? "manager-invitation"
+          : nextRole === "manager" && selectedBrandId
+            ? "brand"
+            : nextRole === "creator" && selectedOfferId
+              ? "offer"
+              : nextRole,
+        { asRole: nextRole, offerId: selectedOfferId || undefined },
+      );
       return null;
     } catch (error) {
       notify(error.message);
@@ -3353,6 +3376,11 @@ function App() {
     setBrandFinance({ orders: { items: [] }, commissions: { items: [] }, analytics: {}, creatorAnalytics: { items: [] } });
     setAdminFinance({ commissions: { items: [] }, payouts: { items: [] }, ledger: { items: [] } });
     setOrderImportPreview(null);
+    try {
+      await loadPublicOffers();
+    } catch {
+      // Keep the guest shell usable if the public catalog is temporarily unavailable.
+    }
     navigate("home");
   };
 
