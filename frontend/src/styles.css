@@ -523,6 +523,19 @@ p {
   transform: scale(1.025);
 }
 
+.offer-manager-control {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  max-width: 240px;
+}
+
+.compact-select {
+  min-height: 36px;
+  padding: 7px 30px 7px 10px;
+  font-size: 13px;
+}
+
 .offer-card-body {
   padding: 20px;
 }
@@ -678,6 +691,22 @@ p {
   outline: none;
   background: var(--paper);
   color: var(--ink);
+}
+
+.form-hint,
+.form-error {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.form-hint {
+  color: var(--muted);
+}
+
+.form-error {
+  color: #a23b32;
 }
 
 .field:focus,

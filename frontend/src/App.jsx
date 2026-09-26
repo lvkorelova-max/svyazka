@@ -311,10 +311,16 @@ const pageTitles = {
   brand: "Кабинет бренда",
   manager: "Выбор бренда",
   create: "Создание оффера",
-  admin: "Админ-панель"
+  admin: "Админ-панель",
+  "manager-invitation": "Приглашение менеджера"
 };
 
 const managerBrandStorageKey = (userId) => `svyazka:manager-active-brand:${userId}`;
+
+function managerInvitationTokenFromPath(pathname = window.location.pathname) {
+  const match = pathname.match(/^\/manager-invitations\/([^/]+)\/?$/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
 
 function Status({ type = "", children }) {
   return <span className={`status ${type}`}>{children}</span>;
@@ -1934,7 +1940,7 @@ function BrandTeamPanel({ managers, invitations, onInvite, onRevokeInvitation, o
   );
 }
 
-function BrandDashboard({ user, offers, applications, relationships, finance, orderImportPreview, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview, transitionOffer, onUploadOrders, onConfirmOrders, canManageTeam, teamManagers, teamInvitations, onInviteManager, onRevokeInvitation, onRemoveManager }) {
+function BrandDashboard({ user, offers, applications, relationships, finance, orderImportPreview, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview, transitionOffer, onUploadOrders, onConfirmOrders, canManageTeam, teamManagers, teamInvitations, onInviteManager, onRevokeInvitation, onRemoveManager, onChangeOfferManager }) {
   const [tab, setTab] = useState("offers");
   const items = [
     { id: "offers", label: "Офферы" },
@@ -2003,7 +2009,15 @@ function BrandDashboard({ user, offers, applications, relationships, finance, or
               <tbody>
                 {offers.map((offer) => (
                   <tr key={offer.id}>
-                    <td><span className="table-title">{offer.title}</span><span className="table-subtitle">{money(offer.price)}</span></td>
+                    <td>
+                      <span className="table-title">{offer.title}</span>
+                      <span className="table-subtitle">{money(offer.price)}</span>
+                      <OfferManagerSelect
+                        offer={offer}
+                        managers={teamManagers}
+                        onChange={(managerId) => onChangeOfferManager(offer.id, managerId)}
+                      />
+                    </td>
                     <td><Status type={offer.status === "active" ? "success" : "pending"}>{offer.statusLabel}</Status></td>
                     <td><strong>{offer.creatorKit.completeness}%</strong><span className="table-subtitle"> заполнено</span></td>
                     <td>{offer.commission}%</td><td>{applications.filter((item) => item.offerId === offer.id).length}</td><td>—</td>
@@ -2128,7 +2142,7 @@ function BrandDashboard({ user, offers, applications, relationships, finance, or
   );
 }
 
-function CreateOfferPage({ publish, navigate, initialOffer }) {
+function CreateOfferPage({ publish, navigate, initialOffer, managers, onChangeOfferManager }) {
   const [form, setForm] = useState({
     title: initialOffer?.title || "Набор для ночного ухода Renewal",
     category: initialOffer?.category || "Красота и уход",
@@ -2185,6 +2199,17 @@ function CreateOfferPage({ publish, navigate, initialOffer }) {
         </div>
         <div className="create-layout">
           <div>
+            {initialOffer && (
+              <section className="form-section">
+                <h2>Ответственный менеджер</h2>
+                <p>Все менеджеры бренда видят этот оффер. Ответственный нужен для рабочего распределения.</p>
+                <OfferManagerSelect
+                  offer={initialOffer}
+                  managers={managers}
+                  onChange={(managerId) => onChangeOfferManager(initialOffer.id, managerId)}
+                />
+              </section>
+            )}
             <section className="form-section">
               <h2>Товар</h2>
               <p>Основная информация, которую увидит креатор.</p>
@@ -2491,12 +2516,39 @@ function toUiOffer(offer, creatorKitResponse = null) {
     terms: "Условия продвижения указаны брендом в карточке оффера.",
     materials: "Материалы Creator Kit хранятся в приватном файловом хранилище.",
     promotionWithoutProduct: offer.promotionWithoutProduct,
-    allowedPromotionFormats: offer.allowedPromotionFormats || []
+    allowedPromotionFormats: offer.allowedPromotionFormats || [],
+    currentManagerId: offer.currentManagerId || null,
+    currentManager: offer.currentManager || null
   };
   const creatorKit = creatorKitResponse
     ? mapCreatorKit(creatorKitResponse, offer)
     : mapCreatorKit({ offerPolicy: { promotionWithoutProduct: offer.promotionWithoutProduct, allowedPromotionFormats: offer.allowedPromotionFormats } }, offer);
   return { ...base, creatorKit };
+}
+
+function managerDisplayName(manager) {
+  return manager?.displayName || manager?.managerProfile?.displayName || manager?.email || "Без менеджера";
+}
+
+function OfferManagerSelect({ offer, managers, onChange, disabled = false }) {
+  return (
+    <label className="offer-manager-control" onClick={(event) => event.stopPropagation()}>
+      <span className="table-subtitle">Ответственный менеджер</span>
+      <select
+        className="select-field compact-select"
+        value={offer.currentManagerId || ""}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value || null)}
+      >
+        <option value="">Без менеджера</option>
+        {managers.map((assignment) => {
+          const manager = assignment.manager || assignment;
+          const managerId = assignment.managerId || manager.id;
+          return <option value={managerId} key={managerId}>{managerDisplayName(manager)}</option>;
+        })}
+      </select>
+    </label>
+  );
 }
 
 const scenarioChannelValues = Object.fromEntries(Object.entries(scenarioChannelLabels).map(([key, value]) => [value, key]));
@@ -2534,8 +2586,156 @@ function creatorKitPayload(kit) {
   };
 }
 
+function ManagerInvitationPage({ token, navigate, notify }) {
+  const [invitation, setInvitation] = useState(null);
+  const [password, setPassword] = useState("");
+  const [passwordConfirmation, setPasswordConfirmation] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [invitationError, setInvitationError] = useState("");
+  const [submitError, setSubmitError] = useState("");
+  const [accepted, setAccepted] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    api(`/manager-invitations/${encodeURIComponent(token)}`)
+      .then((data) => {
+        if (!active) return;
+        setInvitation(data);
+      })
+      .catch((requestError) => {
+        if (active) setInvitationError(requestError.message || "Приглашение недействительно или истекло");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [token]);
+
+  const submit = async (event) => {
+    event.preventDefault();
+    const passwordIsValid = password.length >= 10 && /[a-zа-яё]/i.test(password) && /\d/.test(password);
+    if (!passwordIsValid) {
+      setSubmitError("Пароль должен содержать минимум 10 символов, хотя бы 1 букву и 1 цифру");
+      return;
+    }
+    if (password !== passwordConfirmation) {
+      setSubmitError("Пароли не совпадают");
+      return;
+    }
+    setSubmitting(true);
+    setSubmitError("");
+    try {
+      await api(`/manager-invitations/${encodeURIComponent(token)}/accept`, {
+        method: "POST",
+        body: JSON.stringify({ password })
+      });
+      setAccepted(true);
+      notify("Аккаунт менеджера создан. Выполните вход.");
+    } catch (requestError) {
+      setSubmitError(requestError.message || "Не удалось принять приглашение");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (loading) {
+    return <main className="auth-main"><div className="auth-panel"><h2>Проверяем приглашение…</h2></div></main>;
+  }
+
+  if (accepted) {
+    return (
+      <main className="auth-page">
+        <section className="auth-main">
+          <div className="auth-panel">
+            <h2>Приглашение принято</h2>
+            <p>Аккаунт менеджера создан. Войдите с адресом приглашения и новым паролем.</p>
+            <div className="form-actions">
+              <button className="button" onClick={() => navigate("login")}>Перейти ко входу</button>
+            </div>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  if (invitationError || !invitation?.valid) {
+    return (
+      <main className="auth-page">
+        <section className="auth-main">
+          <div className="auth-panel">
+            <h2>Приглашение недоступно</h2>
+            <p>{invitationError || "Приглашение недействительно, отозвано или истекло."}</p>
+            <div className="form-actions">
+              <button className="button secondary" onClick={() => navigate("login")}>Перейти ко входу</button>
+            </div>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  if (invitation.existingManagerAccount) {
+    return (
+      <main className="auth-page">
+        <section className="auth-main">
+          <div className="auth-panel">
+            <h2>Нужен вход менеджера</h2>
+            <p>Этот email уже связан с аккаунтом MANAGER. Войдите в существующий аккаунт, чтобы принять приглашение.</p>
+            <div className="form-actions">
+              <button className="button" onClick={() => navigate("login")}>Перейти ко входу</button>
+            </div>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  return (
+    <main className="auth-page">
+      <aside className="auth-aside">
+        <div>
+          <BrandLogo onClick={() => navigate("home")} />
+          <h1>Вас приглашают в команду бренда</h1>
+          <p>Создайте пароль, чтобы открыть рабочий кабинет менеджера.</p>
+        </div>
+      </aside>
+      <section className="auth-main">
+        <div className="auth-panel">
+          <h2>{invitation.brand?.name || "Приглашение менеджера"}</h2>
+          <p>Имя: <strong>{invitation.displayName}</strong></p>
+          <p>Email: <strong>{invitation.email}</strong></p>
+          <p>Приглашение действительно до {new Date(invitation.expiresAt).toLocaleDateString("ru-RU")}.</p>
+          <form className="form-grid" onSubmit={submit}>
+            <div className="form-group full">
+              <span className="form-label">Имя в приглашении</span>
+              <div className="field">{invitation.displayName}</div>
+            </div>
+            <div className="form-group full">
+              <label className="form-label">Новый пароль</label>
+              <input className="field" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" required />
+              <span className="form-hint">Минимум 10 символов, хотя бы 1 буква и 1 цифра.</span>
+              {submitError && submitError !== "Пароли не совпадают" && <span className="form-error">{submitError}</span>}
+            </div>
+            <div className="form-group full">
+              <label className="form-label">Повторите пароль</label>
+              <input className="field" type="password" value={passwordConfirmation} onChange={(event) => setPasswordConfirmation(event.target.value)} autoComplete="new-password" required />
+              {submitError === "Пароли не совпадают" && <span className="form-error">{submitError}</span>}
+            </div>
+            <div className="form-actions full">
+              <button className="button" type="submit" disabled={submitting}>{submitting ? "Создаём аккаунт…" : "Создать аккаунт менеджера"}</button>
+            </div>
+          </form>
+        </div>
+      </section>
+    </main>
+  );
+}
+
 function App() {
   const [page, setPage] = useState("home");
+  const [invitationToken] = useState(() => managerInvitationTokenFromPath());
   const [role, setRole] = useState("guest");
   const [user, setUser] = useState(null);
   const [offers, setOffers] = useState([]);
@@ -2618,6 +2818,11 @@ function App() {
     setTeamInvitations(invitationsData);
   };
 
+  const loadActiveManagers = async () => {
+    const managersData = await api("/brand/team/managers");
+    setTeamManagers(managersData);
+  };
+
   const navigate = (target, options = {}) => {
     if (options.role) setRegisterRole(options.role);
     if (options.offerId) setSelectedOfferId(options.offerId);
@@ -2638,6 +2843,8 @@ function App() {
     if (["brand", "manager"].includes(currentRole)) {
       if (currentRole === "brand") {
         await loadBrandTeam();
+      } else {
+        await loadActiveManagers();
       }
       const data = await api("/brand/offers");
       const mapped = await Promise.all(data.map(async (offer) => {
@@ -2820,6 +3027,11 @@ function App() {
     let active = true;
     restoreSession().then(async (restoredUser) => {
       if (!active) return;
+      if (invitationToken) {
+        setSessionReady(true);
+        setPage("manager-invitation");
+        return;
+      }
       const restoredRole = roleFromUser(restoredUser);
       setUser(restoredUser);
       setRole(restoredRole);
@@ -2853,7 +3065,7 @@ function App() {
       setSessionReady(true);
     });
     return () => { active = false; };
-  }, []);
+  }, [invitationToken]);
 
   useEffect(() => {
     const onPop = () => {
@@ -3181,6 +3393,19 @@ function App() {
     }
   };
 
+  const changeOfferManager = async (offerId, managerId) => {
+    try {
+      await api(`/brand/offers/${offerId}/responsibility`, {
+        method: "PATCH",
+        body: JSON.stringify(managerId ? { managerId } : {})
+      });
+      await loadOffers(role);
+      notify(managerId ? "Ответственный менеджер обновлён" : "Оффер оставлен без менеджера");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
   const toggleCreatorKitAsset = async (offerId, assetId, active) => {
     try {
       await api(`/brand/offers/${offerId}/creator-kit/assets/${assetId}/${active ? "disable" : "enable"}`, { method: "POST" });
@@ -3249,7 +3474,7 @@ function App() {
 
   return (
     <div className="app">
-      {!["register", "login"].includes(page) && <Header page={page} role={role} navigate={navigate} logout={logout} />}
+      {!["register", "login", "manager-invitation"].includes(page) && <Header page={page} role={role} navigate={navigate} logout={logout} />}
       {role === "manager" && activeBrandId && managerBrands.length > 1 && ["brand", "create"].includes(page) && (
         <ManagerBrandSelector
           brands={managerBrands}
@@ -3259,15 +3484,16 @@ function App() {
         />
       )}
       {page === "home" && <HomePage offers={offers.filter((offer) => offer.status === "active")} navigate={navigate} openOffer={openOffer} />}
+      {page === "manager-invitation" && invitationToken && <ManagerInvitationPage token={invitationToken} navigate={navigate} notify={notify} />}
       {page === "catalog" && <CatalogPage offers={offers} openOffer={openOffer} navigate={navigate} />}
       {page === "offer" && selectedOffer && <OfferPage offer={selectedOffer} applicationStatus={(applications.find((item) => item.offerId === selectedOffer.id)?.status || "NONE").toLowerCase()} role={role} apply={apply} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} />}
       {page === "register" && <RegisterPage presetRole={registerRole} complete={completeRegistration} navigate={navigate} />}
       {page === "login" && <LoginPage login={login} verifyMfa={verifyMfa} navigate={navigate} />}
       {page === "creator" && role === "creator" && <CreatorDashboard user={user} applications={applications} relationships={relationships} offers={offers} finance={creatorFinance} cancelApplication={cancelApplication} copyValue={copyValue} navigate={navigate} />}
-      {page === "brand" && role === "brand" && <BrandDashboard user={user} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} canManageTeam teamManagers={teamManagers} teamInvitations={teamInvitations} onInviteManager={inviteManager} onRevokeInvitation={revokeInvitation} onRemoveManager={removeManager} />}
+      {page === "brand" && role === "brand" && <BrandDashboard user={user} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} canManageTeam teamManagers={teamManagers} teamInvitations={teamInvitations} onInviteManager={inviteManager} onRevokeInvitation={revokeInvitation} onRemoveManager={removeManager} />}
       {["manager", "brand", "create"].includes(page) && role === "manager" && !activeBrandId && <ManagerBrandSelector brands={managerBrands} activeBrandId={activeBrandId} onSelect={selectManagerBrand} />}
-      {page === "brand" && role === "manager" && activeBrandId && <BrandDashboard user={brandDashboardUser} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} />}
-      {page === "create" && ["brand", "manager"].includes(role) && (role !== "manager" || activeBrandId) && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} />}
+      {page === "brand" && role === "manager" && activeBrandId && <BrandDashboard user={brandDashboardUser} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} teamManagers={teamManagers} />}
+      {page === "create" && ["brand", "manager"].includes(role) && (role !== "manager" || activeBrandId) && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} managers={teamManagers} onChangeOfferManager={changeOfferManager} />}
       {page === "admin" && role === "admin" && <AdminDashboard user={user} offers={offers} brands={adminBrands} operationalReadiness={operationalReadiness} finance={adminFinance} createPayout={createPayout} approvePayout={approvePayout} markPayoutPaid={markPayoutPaid} cancelPayout={cancelPayout} verifyBrand={verifyBrand} changeAdminPassword={changeAdminPassword} beginAdminMfa={beginAdminMfa} confirmAdminMfa={confirmAdminMfa} />}
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
