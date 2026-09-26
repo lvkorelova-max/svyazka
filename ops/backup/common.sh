@@ -74,3 +74,16 @@ retention_days() {
   fi
   printf '%s' "$value"
 }
+
+run_retention() {
+  local tag="$1"
+  if [ "${BACKUP_RETENTION_ENABLED:-true}" != "true" ]; then
+    printf 'Automatic retention disabled; skipping restic forget for tag %s\n' "$tag" >&2
+    return 0
+  fi
+  restic forget \
+    --tag "$tag" \
+    --keep-daily "$(retention_days)" \
+    --group-by tags \
+    --prune
+}

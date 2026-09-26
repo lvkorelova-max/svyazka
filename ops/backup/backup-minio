@@ -32,6 +32,6 @@ snapshot_id="$(
     tail -n 1
 )"
 test -n "$snapshot_id"
-restic forget --tag minio --keep-daily "$(retention_days)" --prune
+run_retention minio
 complete_backup_run "$run_id" "$snapshot_id" "$(cat "$work_dir/manifest.json")"
 printf '%s\n' "$snapshot_id"
