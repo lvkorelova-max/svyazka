@@ -3386,7 +3386,7 @@ function App() {
   const updateApplication = async (applicationId, action) => {
     try {
       await api(`/brand/applications/${applicationId}/${action}`, { method: "POST" });
-      await loadOffers("brand");
+      await loadOffers(role);
       notify(action === "approve" ? "Заявка одобрена, партнёрская связь создана" : "Заявка отклонена");
     } catch (error) {
       notify(error.message);
@@ -3396,7 +3396,7 @@ function App() {
   const transitionRelationship = async (relationshipId, action) => {
     try {
       await api(`/brand/affiliate-relationships/${relationshipId}/${action}`, { method: "POST" });
-      await loadOffers("brand");
+      await loadOffers(role);
       notify("Статус партнёрской связи обновлён");
     } catch (error) {
       notify(error.message);
@@ -3564,7 +3564,7 @@ function App() {
         body: JSON.stringify(creatorKitPayload(offer.creatorKit))
       });
       if (shouldPublish) await api(`/brand/offers/${saved.id}/publish`, { method: "POST" });
-      await loadOffers("brand");
+      await loadOffers(role);
       notify(shouldPublish ? "Оффер сохранён и опубликован" : "Черновик сохранён");
       navigate("brand");
     } catch (error) {
@@ -3575,7 +3575,7 @@ function App() {
   const transitionOffer = async (offerId, action) => {
     try {
       await api(`/brand/offers/${offerId}/${action}`, { method: "POST" });
-      await loadOffers("brand");
+      await loadOffers(role);
       notify("Статус оффера обновлён");
     } catch (error) {
       notify(error.message);
@@ -3598,7 +3598,7 @@ function App() {
   const toggleCreatorKitAsset = async (offerId, assetId, active) => {
     try {
       await api(`/brand/offers/${offerId}/creator-kit/assets/${assetId}/${active ? "disable" : "enable"}`, { method: "POST" });
-      await loadOffers("brand");
+      await loadOffers(role);
       notify(active ? "Материал отключён" : "Материал снова доступен");
     } catch (error) {
       notify(error.message);
@@ -3641,7 +3641,7 @@ function App() {
       });
       if (!uploadResponse.ok) throw new Error("Хранилище не приняло файл");
       await api(`/brand/offers/${offerId}/creator-kit/assets/${initialized.asset.id}/complete`, { method: "POST" });
-      await loadOffers("brand");
+      await loadOffers(role);
       notify("Материал загружен и проверен сервером");
     } catch (error) {
       notify(error.message);
