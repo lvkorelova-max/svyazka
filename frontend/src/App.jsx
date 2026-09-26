@@ -648,7 +648,35 @@ function PermissionValue({ value }) {
   return <span className={`permission-value ${value ? "yes" : "no"}`}>{value ? "Разрешено" : "Нет"}</span>;
 }
 
-function CreatorKit({ offer, mode = "creator", hasProductAccess = false, notify, onToggleAsset, onDownloadAsset }) {
+function CreatorKitLoadError({ onRetry }) {
+  return (
+    <section className="creator-kit">
+      <div className="empty-state">
+        <h2>Не удалось загрузить Creator Kit</h2>
+        <p>Материалы креатора временно недоступны. Повторите попытку.</p>
+        <button className="button secondary" onClick={onRetry}>Повторить</button>
+      </div>
+    </section>
+  );
+}
+
+function CreatorKit({ offer, mode = "creator", hasProductAccess = false, notify, onToggleAsset, onDownloadAsset, onRetry }) {
+  if (mode === "creator" && (offer.creatorKitError || !offer.creatorKit)) {
+    return <CreatorKitLoadError onRetry={onRetry} />;
+  }
+  return (
+    <CreatorKitContent
+      offer={offer}
+      mode={mode}
+      hasProductAccess={hasProductAccess}
+      notify={notify}
+      onToggleAsset={onToggleAsset}
+      onDownloadAsset={onDownloadAsset}
+    />
+  );
+}
+
+function CreatorKitContent({ offer, mode = "creator", hasProductAccess = false, notify, onToggleAsset, onDownloadAsset }) {
   const kit = offer.creatorKit || buildCreatorKit(offer);
   const [selectedAssets, setSelectedAssets] = useState(kit.assets.filter((asset) => asset.active).slice(0, 2).map((asset) => asset.id));
   const [kitTab, setKitTab] = useState("assets");
@@ -892,7 +920,7 @@ function CreatorKit({ offer, mode = "creator", hasProductAccess = false, notify,
   );
 }
 
-function OfferPage({ offer, applicationStatus, role, apply, navigate, notify, onToggleAsset, onDownloadAsset }) {
+function OfferPage({ offer, applicationStatus, role, apply, navigate, notify, onToggleAsset, onDownloadAsset, onRetryCreatorKit }) {
   const [applicationOpen, setApplicationOpen] = useState(false);
   const [applicationMessage, setApplicationMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -986,6 +1014,7 @@ function OfferPage({ offer, applicationStatus, role, apply, navigate, notify, on
             notify={notify}
             onToggleAsset={onToggleAsset}
             onDownloadAsset={onDownloadAsset}
+            onRetry={() => onRetryCreatorKit(offer.id)}
           />
         )}
       </div>
@@ -3031,8 +3060,13 @@ function App() {
             };
           }
           return uiOffer;
-        } catch {
-          return toUiOffer(offer);
+        } catch (error) {
+          return {
+            ...toUiOffer(offer),
+            creatorKit: null,
+            creatorKitError: true,
+            creatorKitErrorMessage: error.message || "Не удалось загрузить Creator Kit"
+          };
         }
       }));
       setOffers(mapped);
@@ -3054,6 +3088,40 @@ function App() {
       setOffers([]);
       setApplications([]);
       setRelationships([]);
+    }
+  };
+
+  const retryCreatorKit = async (offerId) => {
+    setOffers((current) => current.map((offer) => (
+      offer.id === offerId
+        ? { ...offer, creatorKitError: false, creatorKitErrorMessage: "" }
+        : offer
+    )));
+    try {
+      const offer = offers.find((item) => item.id === offerId);
+      if (!offer) throw new Error("Оффер не найден");
+      const kit = await api(`/creator/offers/${offerId}/creator-kit`);
+      const nextOffer = toUiOffer(offer, kit);
+      const relationship = relationships.find((item) => item.offerId === offerId && item.status === "ACTIVE");
+      if (relationship) {
+        nextOffer.creatorKit.creatorTools = {
+          link: relationship.affiliateUrl,
+          promoCode: relationship.promoCode,
+          status: relationship.status
+        };
+      }
+      setOffers((current) => current.map((item) => item.id === offerId ? nextOffer : item));
+    } catch (error) {
+      setOffers((current) => current.map((offer) => (
+        offer.id === offerId
+          ? {
+              ...offer,
+              creatorKit: null,
+              creatorKitError: true,
+              creatorKitErrorMessage: error.message || "Не удалось загрузить Creator Kit"
+            }
+          : offer
+      )));
     }
   };
 
@@ -3695,7 +3763,7 @@ function App() {
       {page === "home" && <HomePage offers={offers.filter((offer) => offer.status === "active")} navigate={navigate} openOffer={openOffer} />}
       {page === "manager-invitation" && invitationToken && <ManagerInvitationPage token={invitationToken} user={user} role={role} navigate={navigate} notify={notify} onAcceptExisting={acceptExistingManagerInvitation} />}
       {page === "catalog" && <CatalogPage offers={offers} openOffer={openOffer} navigate={navigate} role={role} />}
-      {page === "offer" && selectedOffer && <OfferPage offer={selectedOffer} applicationStatus={(applications.find((item) => item.offerId === selectedOffer.id)?.status || "NONE").toLowerCase()} role={role} apply={apply} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} />}
+      {page === "offer" && selectedOffer && <OfferPage offer={selectedOffer} applicationStatus={(applications.find((item) => item.offerId === selectedOffer.id)?.status || "NONE").toLowerCase()} role={role} apply={apply} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onRetryCreatorKit={retryCreatorKit} />}
       {page === "register" && <RegisterPage presetRole={registerRole} complete={completeRegistration} navigate={navigate} />}
       {page === "login" && <LoginPage login={login} verifyMfa={verifyMfa} navigate={navigate} />}
       {page === "creator" && role === "creator" && <CreatorDashboard user={user} applications={applications} relationships={relationships} offers={offers} finance={creatorFinance} cancelApplication={cancelApplication} copyValue={copyValue} navigate={navigate} />}
