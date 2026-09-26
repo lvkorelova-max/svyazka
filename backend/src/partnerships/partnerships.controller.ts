@@ -161,7 +161,7 @@ export class PartnershipsController {
   }
 
   @Patch('brand/affiliate-relationships/:id/responsibility')
-  @Roles(UserRole.MANAGER)
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
   updateResponsibility(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) relationshipId: string,
