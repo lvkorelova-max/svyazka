@@ -536,6 +536,13 @@ p {
   font-size: 13px;
 }
 
+.offer-filter-control {
+  display: inline-grid;
+  grid-template-columns: auto minmax(150px, auto);
+  align-items: center;
+  gap: 8px;
+}
+
 .offer-card-body {
   padding: 20px;
 }

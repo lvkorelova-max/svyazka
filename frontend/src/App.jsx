@@ -583,7 +583,7 @@ function HomePage({ offers, navigate, openOffer }) {
   );
 }
 
-function CatalogPage({ offers, openOffer, navigate }) {
+function CatalogPage({ offers, openOffer, navigate, role }) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("Все категории");
   const [commission, setCommission] = useState("Любая комиссия");
@@ -608,7 +608,7 @@ function CatalogPage({ offers, openOffer, navigate }) {
               <h1>Офферы брендов</h1>
               <p>Выбирайте товары, сравнивайте комиссию и заранее смотрите, сколько подтверждённых продаж потребуется для запроса продукта.</p>
             </div>
-            <button className="button secondary" onClick={() => navigate("register", { role: "creator" })}>Стать креатором</button>
+            {role !== "manager" && <button className="button secondary" onClick={() => navigate("register", { role: "creator" })}>Стать креатором</button>}
           </div>
         </div>
         <div className="catalog-toolbar">
@@ -1940,8 +1940,19 @@ function BrandTeamPanel({ managers, invitations, onInvite, onRevokeInvitation, o
   );
 }
 
-function BrandDashboard({ user, offers, applications, relationships, finance, orderImportPreview, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview, transitionOffer, onUploadOrders, onConfirmOrders, canManageTeam, teamManagers, teamInvitations, onInviteManager, onRevokeInvitation, onRemoveManager, onChangeOfferManager }) {
+function BrandDashboard({ user, role, offers, applications, relationships, finance, orderImportPreview, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview, transitionOffer, onUploadOrders, onConfirmOrders, canManageTeam, teamManagers, teamInvitations, onInviteManager, onRevokeInvitation, onRemoveManager, onChangeOfferManager }) {
   const [tab, setTab] = useState("offers");
+  const [offerFilter, setOfferFilter] = useState("all");
+  const isManager = role === "manager";
+  const visibleOffers = isManager
+    ? offers.filter((offer) => (
+      offerFilter === "mine"
+        ? offer.currentManagerId === user?.id
+        : offerFilter === "unassigned"
+          ? offer.currentManagerId == null
+          : true
+    ))
+    : offers;
   const items = [
     { id: "offers", label: "Офферы" },
     { id: "applications", label: "Заявки" },
@@ -2002,12 +2013,24 @@ function BrandDashboard({ user, offers, applications, relationships, finance, or
 
       {tab === "offers" && (
         <div className="panel">
-          <div className="panel-header"><h2>Офферы</h2></div>
+          <div className="panel-header">
+            <h2>Офферы</h2>
+            {isManager && (
+              <label className="offer-filter-control">
+                <span className="table-subtitle">Показать</span>
+                <select className="select-field compact-select" value={offerFilter} onChange={(event) => setOfferFilter(event.target.value)}>
+                  <option value="all">Все</option>
+                  <option value="mine">Мои</option>
+                  <option value="unassigned">Без менеджера</option>
+                </select>
+              </label>
+            )}
+          </div>
           <div className="table-wrap">
             <table className="data-table">
               <thead><tr><th>Оффер</th><th>Статус</th><th>Creator Kit</th><th>Комиссия</th><th>Заявки</th><th>Продажи</th><th></th></tr></thead>
               <tbody>
-                {offers.map((offer) => (
+                {visibleOffers.map((offer) => (
                   <tr key={offer.id}>
                     <td>
                       <span className="table-title">{offer.title}</span>
@@ -2036,6 +2059,7 @@ function BrandDashboard({ user, offers, applications, relationships, finance, or
               </tbody>
             </table>
           </div>
+          {!visibleOffers.length && <div className="empty-state">Офферов по выбранному фильтру нет.</div>}
         </div>
       )}
 
@@ -3485,14 +3509,14 @@ function App() {
       )}
       {page === "home" && <HomePage offers={offers.filter((offer) => offer.status === "active")} navigate={navigate} openOffer={openOffer} />}
       {page === "manager-invitation" && invitationToken && <ManagerInvitationPage token={invitationToken} navigate={navigate} notify={notify} />}
-      {page === "catalog" && <CatalogPage offers={offers} openOffer={openOffer} navigate={navigate} />}
+      {page === "catalog" && <CatalogPage offers={offers} openOffer={openOffer} navigate={navigate} role={role} />}
       {page === "offer" && selectedOffer && <OfferPage offer={selectedOffer} applicationStatus={(applications.find((item) => item.offerId === selectedOffer.id)?.status || "NONE").toLowerCase()} role={role} apply={apply} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} />}
       {page === "register" && <RegisterPage presetRole={registerRole} complete={completeRegistration} navigate={navigate} />}
       {page === "login" && <LoginPage login={login} verifyMfa={verifyMfa} navigate={navigate} />}
       {page === "creator" && role === "creator" && <CreatorDashboard user={user} applications={applications} relationships={relationships} offers={offers} finance={creatorFinance} cancelApplication={cancelApplication} copyValue={copyValue} navigate={navigate} />}
-      {page === "brand" && role === "brand" && <BrandDashboard user={user} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} canManageTeam teamManagers={teamManagers} teamInvitations={teamInvitations} onInviteManager={inviteManager} onRevokeInvitation={revokeInvitation} onRemoveManager={removeManager} />}
+      {page === "brand" && role === "brand" && <BrandDashboard user={user} role={role} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} canManageTeam teamManagers={teamManagers} teamInvitations={teamInvitations} onInviteManager={inviteManager} onRevokeInvitation={revokeInvitation} onRemoveManager={removeManager} />}
       {["manager", "brand", "create"].includes(page) && role === "manager" && !activeBrandId && <ManagerBrandSelector brands={managerBrands} activeBrandId={activeBrandId} onSelect={selectManagerBrand} />}
-      {page === "brand" && role === "manager" && activeBrandId && <BrandDashboard user={brandDashboardUser} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} teamManagers={teamManagers} />}
+      {page === "brand" && role === "manager" && activeBrandId && <BrandDashboard user={brandDashboardUser} role={role} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} teamManagers={teamManagers} />}
       {page === "create" && ["brand", "manager"].includes(role) && (role !== "manager" || activeBrandId) && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} managers={teamManagers} onChangeOfferManager={changeOfferManager} />}
       {page === "admin" && role === "admin" && <AdminDashboard user={user} offers={offers} brands={adminBrands} operationalReadiness={operationalReadiness} finance={adminFinance} createPayout={createPayout} approvePayout={approvePayout} markPayoutPaid={markPayoutPaid} cancelPayout={cancelPayout} verifyBrand={verifyBrand} changeAdminPassword={changeAdminPassword} beginAdminMfa={beginAdminMfa} confirmAdminMfa={confirmAdminMfa} />}
       {toast && <div className="toast" role="status">{toast}</div>}
