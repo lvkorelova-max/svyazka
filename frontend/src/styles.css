@@ -1174,6 +1174,32 @@ p {
   color: var(--ink);
 }
 
+.manager-brand-current {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.manager-brand-current strong {
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.dashboard-brand-heading-select {
+  max-width: min(100%, 520px);
+  padding: 0 42px 2px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-size: clamp(28px, 4vw, 42px);
+  font-weight: 760;
+  line-height: 1.1;
+}
+
 .team-invite-form {
   overflow: hidden;
 }

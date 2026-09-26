@@ -316,6 +316,7 @@ const pageTitles = {
 };
 
 const managerBrandStorageKey = (userId) => `svyazka:manager-active-brand:${userId}`;
+const managerInvitationStorageKey = "svyazka:pending-manager-invitation";
 
 function managerInvitationTokenFromPath(pathname = window.location.pathname) {
   const match = pathname.match(/^\/manager-invitations\/([^/]+)\/?$/);
@@ -403,7 +404,14 @@ function ManagerBrandSelector({ brands, activeBrandId, onSelect, compact = false
     );
   }
 
-  const selector = (
+  const selectedBrand = brands.find((brand) => brand.id === activeBrandId) || brands[0];
+  const brandName = selectedBrand?.brandName || selectedBrand?.legalName || selectedBrand?.id;
+  const selector = brands.length === 1 ? (
+    <div className="manager-brand-current">
+      <span>Текущий бренд</span>
+      <strong>{brandName}</strong>
+    </div>
+  ) : (
     <label className="manager-brand-select">
       <span>{compact ? "Активный бренд" : "Выберите бренд для работы"}</span>
       <select
@@ -1940,7 +1948,7 @@ function BrandTeamPanel({ managers, invitations, onInvite, onRevokeInvitation, o
   );
 }
 
-function BrandDashboard({ user, role, offers, applications, relationships, finance, orderImportPreview, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview, transitionOffer, onUploadOrders, onConfirmOrders, canManageTeam, teamManagers, teamInvitations, onInviteManager, onRevokeInvitation, onRemoveManager, onChangeOfferManager, onChangeRelationshipManager }) {
+function BrandDashboard({ user, role, managerBrands, activeBrandId, onSelectManagerBrand, offers, applications, relationships, finance, orderImportPreview, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview, transitionOffer, onUploadOrders, onConfirmOrders, canManageTeam, teamManagers, teamInvitations, onInviteManager, onRevokeInvitation, onRemoveManager, onChangeOfferManager, onChangeRelationshipManager }) {
   const [tab, setTab] = useState("offers");
   const [offerFilter, setOfferFilter] = useState("all");
   const [relationshipFilter, setRelationshipFilter] = useState("all");
@@ -2007,7 +2015,20 @@ function BrandDashboard({ user, role, offers, applications, relationships, finan
         <>
           <div className="dashboard-header">
             <div>
-              <h1>Бренд {user?.profile?.brandName || "без названия"}</h1>
+              {role === "manager" && managerBrands.length > 1 ? (
+                <select
+                  className="dashboard-brand-heading-select"
+                  value={activeBrandId || ""}
+                  onChange={(event) => event.target.value && onSelectManagerBrand(event.target.value)}
+                  aria-label="Текущий бренд"
+                >
+                  {managerBrands.map((brand) => (
+                    <option key={brand.id} value={brand.id}>{brand.brandName || brand.legalName || brand.id}</option>
+                  ))}
+                </select>
+              ) : (
+                <h1>{user?.profile?.brandName || "Без названия"}</h1>
+              )}
               <p>Управление офферами и заявками креаторов.</p>
             </div>
             <button className="button" onClick={() => navigate("create")}>＋ Создать оффер</button>
@@ -2659,7 +2680,7 @@ function creatorKitPayload(kit) {
   };
 }
 
-function ManagerInvitationPage({ token, navigate, notify }) {
+function ManagerInvitationPage({ token, user, role, navigate, notify, onAcceptExisting }) {
   const [invitation, setInvitation] = useState(null);
   const [password, setPassword] = useState("");
   const [passwordConfirmation, setPasswordConfirmation] = useState("");
@@ -2668,6 +2689,16 @@ function ManagerInvitationPage({ token, navigate, notify }) {
   const [invitationError, setInvitationError] = useState("");
   const [submitError, setSubmitError] = useState("");
   const [accepted, setAccepted] = useState(false);
+  const [existingAccepted, setExistingAccepted] = useState(false);
+
+  const continueToLogin = () => {
+    try {
+      window.sessionStorage.setItem(managerInvitationStorageKey, token);
+    } catch {
+      // The invitation token remains in the current URL when storage is unavailable.
+    }
+    navigate("login");
+  };
 
   useEffect(() => {
     let active = true;
@@ -2713,6 +2744,20 @@ function ManagerInvitationPage({ token, navigate, notify }) {
     }
   };
 
+  const acceptExisting = async () => {
+    setSubmitting(true);
+    setSubmitError("");
+    try {
+      await onAcceptExisting(token);
+      setExistingAccepted(true);
+      notify("Бренд добавлен в ваш аккаунт менеджера.");
+    } catch (requestError) {
+      setSubmitError(requestError.message || "Не удалось принять приглашение");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   if (loading) {
     return <main className="auth-main"><div className="auth-panel"><h2>Проверяем приглашение…</h2></div></main>;
   }
@@ -2733,6 +2778,22 @@ function ManagerInvitationPage({ token, navigate, notify }) {
     );
   }
 
+  if (existingAccepted) {
+    return (
+      <main className="auth-page">
+        <section className="auth-main">
+          <div className="auth-panel">
+            <h2>Приглашение принято</h2>
+            <p>Новый бренд добавлен среди доступных вам брендов.</p>
+            <div className="form-actions">
+              <button className="button" onClick={() => navigate("brand", { asRole: "manager" })}>Открыть кабинет бренда</button>
+            </div>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
   if (invitationError || !invitation?.valid) {
     return (
       <main className="auth-page">
@@ -2741,7 +2802,7 @@ function ManagerInvitationPage({ token, navigate, notify }) {
             <h2>Приглашение недоступно</h2>
             <p>{invitationError || "Приглашение недействительно, отозвано или истекло."}</p>
             <div className="form-actions">
-              <button className="button secondary" onClick={() => navigate("login")}>Перейти ко входу</button>
+              <button className="button secondary" onClick={continueToLogin}>Перейти ко входу</button>
             </div>
           </div>
         </section>
@@ -2750,14 +2811,23 @@ function ManagerInvitationPage({ token, navigate, notify }) {
   }
 
   if (invitation.existingManagerAccount) {
+    const authenticatedManager = role === "manager" && Boolean(user?.id);
     return (
       <main className="auth-page">
         <section className="auth-main">
           <div className="auth-panel">
             <h2>Нужен вход менеджера</h2>
             <p>Этот email уже связан с аккаунтом MANAGER. Войдите в существующий аккаунт, чтобы принять приглашение.</p>
+            {authenticatedManager ? (
+              <>
+                {submitError && <span className="form-error">{submitError}</span>}
+                <button className="button" onClick={acceptExisting} disabled={submitting}>
+                  {submitting ? "Принимаем приглашение…" : "Принять приглашение"}
+                </button>
+              </>
+            ) : null}
             <div className="form-actions">
-              <button className="button" onClick={() => navigate("login")}>Перейти ко входу</button>
+              {!authenticatedManager && <button className="button" onClick={continueToLogin}>Перейти ко входу</button>}
             </div>
           </div>
         </section>
@@ -2808,7 +2878,15 @@ function ManagerInvitationPage({ token, navigate, notify }) {
 
 function App() {
   const [page, setPage] = useState("home");
-  const [invitationToken] = useState(() => managerInvitationTokenFromPath());
+  const [invitationToken] = useState(() => {
+    const pathToken = managerInvitationTokenFromPath();
+    if (pathToken) return pathToken;
+    try {
+      return window.sessionStorage.getItem(managerInvitationStorageKey);
+    } catch {
+      return null;
+    }
+  });
   const [role, setRole] = useState("guest");
   const [user, setUser] = useState(null);
   const [offers, setOffers] = useState([]);
@@ -3061,6 +3139,19 @@ function App() {
     }
   };
 
+  const acceptExistingManagerInvitation = async (token) => {
+    if (!user || role !== "manager") throw new Error("Войдите в аккаунт менеджера");
+    await api(`/manager-invitations/${encodeURIComponent(token)}/accept-existing`, {
+      method: "POST"
+    });
+    try {
+      window.sessionStorage.removeItem(managerInvitationStorageKey);
+    } catch {
+      // Ignore unavailable session storage after successful acceptance.
+    }
+    await initializeManagerBrandContext(user);
+  };
+
   const inviteManager = async (payload) => {
     try {
       const invitation = await api("/brand/team/invitations", {
@@ -3101,6 +3192,8 @@ function App() {
     restoreSession().then(async (restoredUser) => {
       if (!active) return;
       if (invitationToken) {
+        setUser(restoredUser);
+        setRole(roleFromUser(restoredUser));
         setSessionReady(true);
         setPage("manager-invitation");
         return;
@@ -3206,7 +3299,17 @@ function App() {
         ? await initializeManagerBrandContext(nextUser)
         : await loadOffers(nextRole).then(() => null);
       notify("Вход выполнен");
-      navigate(nextRole === "manager" && selectedBrandId ? "brand" : nextRole, { asRole: nextRole });
+      let pendingInvitationToken = null;
+      try {
+        pendingInvitationToken = window.sessionStorage.getItem(managerInvitationStorageKey);
+      } catch {
+        // The URL-backed invitation flow can continue without session storage.
+      }
+      navigate(pendingInvitationToken && nextRole === "manager"
+        ? "manager-invitation"
+        : nextRole === "manager" && selectedBrandId
+          ? "brand"
+          : nextRole, { asRole: nextRole });
       return null;
     } catch (error) {
       notify(error.message);
@@ -3561,24 +3664,16 @@ function App() {
   return (
     <div className="app">
       {!["register", "login", "manager-invitation"].includes(page) && <Header page={page} role={role} navigate={navigate} logout={logout} />}
-      {role === "manager" && activeBrandId && managerBrands.length > 1 && ["brand", "create"].includes(page) && (
-        <ManagerBrandSelector
-          brands={managerBrands}
-          activeBrandId={activeBrandId}
-          onSelect={selectManagerBrand}
-          compact
-        />
-      )}
       {page === "home" && <HomePage offers={offers.filter((offer) => offer.status === "active")} navigate={navigate} openOffer={openOffer} />}
-      {page === "manager-invitation" && invitationToken && <ManagerInvitationPage token={invitationToken} navigate={navigate} notify={notify} />}
+      {page === "manager-invitation" && invitationToken && <ManagerInvitationPage token={invitationToken} user={user} role={role} navigate={navigate} notify={notify} onAcceptExisting={acceptExistingManagerInvitation} />}
       {page === "catalog" && <CatalogPage offers={offers} openOffer={openOffer} navigate={navigate} role={role} />}
       {page === "offer" && selectedOffer && <OfferPage offer={selectedOffer} applicationStatus={(applications.find((item) => item.offerId === selectedOffer.id)?.status || "NONE").toLowerCase()} role={role} apply={apply} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} />}
       {page === "register" && <RegisterPage presetRole={registerRole} complete={completeRegistration} navigate={navigate} />}
       {page === "login" && <LoginPage login={login} verifyMfa={verifyMfa} navigate={navigate} />}
       {page === "creator" && role === "creator" && <CreatorDashboard user={user} applications={applications} relationships={relationships} offers={offers} finance={creatorFinance} cancelApplication={cancelApplication} copyValue={copyValue} navigate={navigate} />}
-      {page === "brand" && role === "brand" && <BrandDashboard user={user} role={role} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} onChangeRelationshipManager={changeRelationshipManager} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} canManageTeam teamManagers={teamManagers} teamInvitations={teamInvitations} onInviteManager={inviteManager} onRevokeInvitation={revokeInvitation} onRemoveManager={removeManager} />}
+      {page === "brand" && role === "brand" && <BrandDashboard user={user} role={role} managerBrands={[]} activeBrandId={null} onSelectManagerBrand={() => {}} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} onChangeRelationshipManager={changeRelationshipManager} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} canManageTeam teamManagers={teamManagers} teamInvitations={teamInvitations} onInviteManager={inviteManager} onRevokeInvitation={revokeInvitation} onRemoveManager={removeManager} />}
       {["manager", "brand", "create"].includes(page) && role === "manager" && !activeBrandId && <ManagerBrandSelector brands={managerBrands} activeBrandId={activeBrandId} onSelect={selectManagerBrand} />}
-      {page === "brand" && role === "manager" && activeBrandId && <BrandDashboard user={brandDashboardUser} role={role} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} onChangeRelationshipManager={changeRelationshipManager} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} teamManagers={teamManagers} />}
+      {page === "brand" && role === "manager" && activeBrandId && <BrandDashboard user={brandDashboardUser} role={role} managerBrands={managerBrands} activeBrandId={activeBrandId} onSelectManagerBrand={selectManagerBrand} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} onChangeRelationshipManager={changeRelationshipManager} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} teamManagers={teamManagers} />}
       {page === "create" && ["brand", "manager"].includes(role) && (role !== "manager" || activeBrandId) && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} managers={teamManagers} onChangeOfferManager={changeOfferManager} />}
       {page === "admin" && role === "admin" && <AdminDashboard user={user} offers={offers} brands={adminBrands} operationalReadiness={operationalReadiness} finance={adminFinance} createPayout={createPayout} approvePayout={approvePayout} markPayoutPaid={markPayoutPaid} cancelPayout={cancelPayout} verifyBrand={verifyBrand} changeAdminPassword={changeAdminPassword} beginAdminMfa={beginAdminMfa} confirmAdminMfa={confirmAdminMfa} />}
       {toast && <div className="toast" role="status">{toast}</div>}
