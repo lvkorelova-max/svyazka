@@ -3009,10 +3009,16 @@ function App() {
     if (options.role) setRegisterRole(options.role);
     if (options.offerId) setSelectedOfferId(options.offerId);
     if (target === "create") setEditingOfferId(options.editOfferId || null);
-    const safeTarget = canOpen(target, options.asRole || role) ? target : "login";
+    const nextRole = options.asRole || role;
+    const safeTarget = canOpen(target, nextRole) ? target : "login";
     setPage(safeTarget);
     window.history.pushState({ page: safeTarget }, "", `#${safeTarget}`);
     window.scrollTo({ top: 0, behavior: "smooth" });
+    if (nextRole === "manager" && safeTarget === "catalog") {
+      loadPublicOffers().catch((error) => notify(error.message));
+    } else if (nextRole === "manager" && safeTarget === "brand" && activeBrandId) {
+      loadOffers("manager").catch((error) => notify(error.message));
+    }
     if (options.anchor) {
       window.setTimeout(() => {
         const element = document.getElementById(options.anchor);
