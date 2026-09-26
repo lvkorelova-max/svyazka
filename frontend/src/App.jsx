@@ -1940,9 +1940,10 @@ function BrandTeamPanel({ managers, invitations, onInvite, onRevokeInvitation, o
   );
 }
 
-function BrandDashboard({ user, role, offers, applications, relationships, finance, orderImportPreview, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview, transitionOffer, onUploadOrders, onConfirmOrders, canManageTeam, teamManagers, teamInvitations, onInviteManager, onRevokeInvitation, onRemoveManager, onChangeOfferManager }) {
+function BrandDashboard({ user, role, offers, applications, relationships, finance, orderImportPreview, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview, transitionOffer, onUploadOrders, onConfirmOrders, canManageTeam, teamManagers, teamInvitations, onInviteManager, onRevokeInvitation, onRemoveManager, onChangeOfferManager, onChangeRelationshipManager }) {
   const [tab, setTab] = useState("offers");
   const [offerFilter, setOfferFilter] = useState("all");
+  const [relationshipFilter, setRelationshipFilter] = useState("all");
   const isManager = role === "manager";
   const visibleOffers = isManager
     ? offers.filter((offer) => (
@@ -1953,6 +1954,15 @@ function BrandDashboard({ user, role, offers, applications, relationships, finan
           : true
     ))
     : offers;
+  const visibleRelationships = isManager
+    ? relationships.filter((relationship) => (
+      relationshipFilter === "mine"
+        ? relationship.currentManagerId === user?.id
+        : relationshipFilter === "unassigned"
+          ? relationship.currentManagerId == null
+          : true
+    ))
+    : relationships;
   const items = [
     { id: "offers", label: "Офферы" },
     { id: "applications", label: "Заявки" },
@@ -2095,15 +2105,34 @@ function BrandDashboard({ user, role, offers, applications, relationships, finan
 
       {tab === "partners" && (
         <div className="panel">
-          <div className="panel-header"><h2>Партнёры бренда</h2></div>
+          <div className="panel-header">
+            <h2>Партнёры бренда</h2>
+            {isManager && (
+              <label className="offer-filter-control">
+                <span className="table-subtitle">Показать</span>
+                <select className="select-field compact-select" value={relationshipFilter} onChange={(event) => setRelationshipFilter(event.target.value)}>
+                  <option value="all">Все</option>
+                  <option value="mine">Мои</option>
+                  <option value="unassigned">Без менеджера</option>
+                </select>
+              </label>
+            )}
+          </div>
           <div className="table-wrap">
             <table className="data-table">
               <thead><tr><th>Креатор</th><th>Оффер</th><th>Промокод</th><th>Статус</th><th></th></tr></thead>
               <tbody>
-                {relationships.map((relationship) => (
+                {visibleRelationships.map((relationship) => (
                   <tr key={relationship.id}>
                     <td><span className="table-title">{relationship.creator.displayName}</span><span className="table-subtitle">{relationship.creator.description || "Описание профиля не заполнено"}</span></td>
-                    <td>{relationship.offer.title}</td>
+                    <td>
+                      <span className="table-title">{relationship.offer.title}</span>
+                      <RelationshipManagerSelect
+                        relationship={relationship}
+                        managers={teamManagers}
+                        onChange={(managerId) => onChangeRelationshipManager(relationship.id, managerId)}
+                      />
+                    </td>
                     <td><strong>{relationship.promoCode}</strong></td>
                     <td><Status type={relationship.status === "ACTIVE" ? "success" : relationship.status === "REVOKED" ? "danger" : "pending"}>{relationshipStatusLabels[relationship.status]}</Status></td>
                     <td>
@@ -2118,7 +2147,7 @@ function BrandDashboard({ user, role, offers, applications, relationships, finan
               </tbody>
             </table>
           </div>
-          {!relationships.length && <div className="empty-state">Одобренных партнёров пока нет.</div>}
+          {!visibleRelationships.length && <div className="empty-state">Партнёров по выбранному фильтру нет.</div>}
         </div>
       )}
 
@@ -2562,6 +2591,26 @@ function OfferManagerSelect({ offer, managers, onChange, disabled = false }) {
         className="select-field compact-select"
         value={offer.currentManagerId || ""}
         disabled={disabled}
+        onChange={(event) => onChange(event.target.value || null)}
+      >
+        <option value="">Без менеджера</option>
+        {managers.map((assignment) => {
+          const manager = assignment.manager || assignment;
+          const managerId = assignment.managerId || manager.id;
+          return <option value={managerId} key={managerId}>{managerDisplayName(manager)}</option>;
+        })}
+      </select>
+    </label>
+  );
+}
+
+function RelationshipManagerSelect({ relationship, managers, onChange }) {
+  return (
+    <label className="offer-manager-control" onClick={(event) => event.stopPropagation()}>
+      <span className="table-subtitle">Ответственный менеджер</span>
+      <select
+        className="select-field compact-select"
+        value={relationship.currentManagerId || ""}
         onChange={(event) => onChange(event.target.value || null)}
       >
         <option value="">Без менеджера</option>
@@ -3251,6 +3300,19 @@ function App() {
     }
   };
 
+  const changeRelationshipManager = async (relationshipId, managerId) => {
+    try {
+      await api(`/brand/affiliate-relationships/${relationshipId}/responsibility`, {
+        method: "PATCH",
+        body: JSON.stringify(managerId ? { managerId } : {})
+      });
+      await loadOffers(role);
+      notify(managerId ? "Ответственный менеджер партнёра обновлён" : "Партнёр оставлен без менеджера");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
   const copyValue = (value, message) => {
     if (navigator.clipboard) navigator.clipboard.writeText(value).catch(() => {});
     notify(message);
@@ -3514,9 +3576,9 @@ function App() {
       {page === "register" && <RegisterPage presetRole={registerRole} complete={completeRegistration} navigate={navigate} />}
       {page === "login" && <LoginPage login={login} verifyMfa={verifyMfa} navigate={navigate} />}
       {page === "creator" && role === "creator" && <CreatorDashboard user={user} applications={applications} relationships={relationships} offers={offers} finance={creatorFinance} cancelApplication={cancelApplication} copyValue={copyValue} navigate={navigate} />}
-      {page === "brand" && role === "brand" && <BrandDashboard user={user} role={role} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} canManageTeam teamManagers={teamManagers} teamInvitations={teamInvitations} onInviteManager={inviteManager} onRevokeInvitation={revokeInvitation} onRemoveManager={removeManager} />}
+      {page === "brand" && role === "brand" && <BrandDashboard user={user} role={role} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} onChangeRelationshipManager={changeRelationshipManager} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} canManageTeam teamManagers={teamManagers} teamInvitations={teamInvitations} onInviteManager={inviteManager} onRevokeInvitation={revokeInvitation} onRemoveManager={removeManager} />}
       {["manager", "brand", "create"].includes(page) && role === "manager" && !activeBrandId && <ManagerBrandSelector brands={managerBrands} activeBrandId={activeBrandId} onSelect={selectManagerBrand} />}
-      {page === "brand" && role === "manager" && activeBrandId && <BrandDashboard user={brandDashboardUser} role={role} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} teamManagers={teamManagers} />}
+      {page === "brand" && role === "manager" && activeBrandId && <BrandDashboard user={brandDashboardUser} role={role} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} onChangeRelationshipManager={changeRelationshipManager} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} teamManagers={teamManagers} />}
       {page === "create" && ["brand", "manager"].includes(role) && (role !== "manager" || activeBrandId) && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} managers={teamManagers} onChangeOfferManager={changeOfferManager} />}
       {page === "admin" && role === "admin" && <AdminDashboard user={user} offers={offers} brands={adminBrands} operationalReadiness={operationalReadiness} finance={adminFinance} createPayout={createPayout} approvePayout={approvePayout} markPayoutPaid={markPayoutPaid} cancelPayout={cancelPayout} verifyBrand={verifyBrand} changeAdminPassword={changeAdminPassword} beginAdminMfa={beginAdminMfa} confirmAdminMfa={confirmAdminMfa} />}
       {toast && <div className="toast" role="status">{toast}</div>}
