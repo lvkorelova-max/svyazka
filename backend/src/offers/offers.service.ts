@@ -124,6 +124,9 @@ export class OffersService {
     if (!ALLOWED_TRANSITIONS[offer.status].includes(target)) {
       throw new BadRequestException(`Переход ${offer.status} → ${target} недоступен`);
     }
+    if (target === OfferStatus.PUBLISHED) {
+      this.assertPublishableProductUrl(offer.productUrl);
+    }
     const updated = await this.prisma.offer.update({
       where: { id: offer.id },
       data: { status: target },
@@ -137,6 +140,22 @@ export class OffersService {
       metadata: { previousStatus: offer.status, nextStatus: target },
     });
     return this.withManagerIdentity(updated);
+  }
+
+  private assertPublishableProductUrl(productUrl: string | null | undefined) {
+    if (!productUrl?.trim()) {
+      throw new BadRequestException(
+        'Для публикации у оффера должна быть ссылка на товар',
+      );
+    }
+    try {
+      const url = new URL(productUrl);
+      if (!['http:', 'https:'].includes(url.protocol)) throw new Error();
+    } catch {
+      throw new BadRequestException(
+        'Для публикации у оффера должна быть корректная ссылка на товар',
+      );
+    }
   }
 
   async updateResponsibility(

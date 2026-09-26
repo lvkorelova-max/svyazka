@@ -81,6 +81,77 @@ describe('OffersService manager brand authorization', () => {
     expect(data.currentManagerId).toBeUndefined();
   });
 
+  it('allows a DRAFT offer without a product URL', async () => {
+    (brands.resolveBrand as jest.Mock).mockResolvedValue({ id: 'brand-a' });
+    prisma.user.findUnique.mockResolvedValue({ role: UserRole.BRAND });
+    prisma.offer.create.mockResolvedValue({
+      id: 'offer-a',
+      status: OfferStatus.DRAFT,
+      productUrl: null,
+    });
+    const service = new OffersService(prisma, config, audit, brands);
+
+    await expect(
+      service.create(
+        'brand-a',
+        {
+          title: 'Offer',
+          description: 'Description',
+          productPriceKopecks: 100,
+          creatorCommissionBps: 100,
+          promotionWithoutProduct: 'YES',
+        } as any,
+        undefined,
+      ),
+    ).resolves.toEqual(expect.objectContaining({ status: OfferStatus.DRAFT }));
+  });
+
+  it('rejects publishing an offer without a product URL', async () => {
+    (brands.resolveBrand as jest.Mock).mockResolvedValue({ id: 'brand-a' });
+    prisma.offer.findUnique.mockResolvedValue({
+      id: 'offer-a',
+      brandId: 'brand-a',
+      status: OfferStatus.DRAFT,
+      productUrl: null,
+      brand: {},
+    });
+    const service = new OffersService(prisma, config, audit, brands);
+
+    await expect(
+      service.transition('brand-a', 'offer-a', OfferStatus.PUBLISHED, 'brand-a'),
+    ).rejects.toThrow('Для публикации у оффера должна быть ссылка на товар');
+    expect(prisma.offer.update).not.toHaveBeenCalled();
+  });
+
+  it('allows publishing an offer with a valid product URL', async () => {
+    (brands.resolveBrand as jest.Mock).mockResolvedValue({ id: 'brand-a' });
+    prisma.offer.findUnique.mockResolvedValue({
+      id: 'offer-a',
+      brandId: 'brand-a',
+      status: OfferStatus.DRAFT,
+      productUrl: 'https://shop.example.test/products/offer-a',
+      brand: {},
+    });
+    prisma.offer.update.mockResolvedValue({
+      id: 'offer-a',
+      brandId: 'brand-a',
+      status: OfferStatus.PUBLISHED,
+      productUrl: 'https://shop.example.test/products/offer-a',
+    });
+    const service = new OffersService(prisma, config, audit, brands);
+
+    await expect(
+      service.transition('brand-a', 'offer-a', OfferStatus.PUBLISHED, 'brand-a'),
+    ).resolves.toEqual(
+      expect.objectContaining({ status: OfferStatus.PUBLISHED }),
+    );
+    expect(prisma.offer.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { status: OfferStatus.PUBLISHED },
+      }),
+    );
+  });
+
   it('transfers current responsibility without changing authorship', async () => {
     (brands.resolveBrand as jest.Mock).mockResolvedValue({ id: 'brand-a' });
     (brands.assertManagerAssignedToBrand as jest.Mock).mockResolvedValue('manager-b');
