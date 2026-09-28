@@ -1680,6 +1680,7 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
   const [previewKit, setPreviewKit] = useState(null);
   const [scenarioDrafts, setScenarioDrafts] = useState([]);
   const [scenariosLoaded, setScenariosLoaded] = useState(false);
+  const [scenarioErrors, setScenarioErrors] = useState({});
   const [savingScenarios, setSavingScenarios] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadForm, setUploadForm] = useState({
@@ -1713,6 +1714,7 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
   useEffect(() => {
     const loadedScenarios = selectedOffer?.creatorKitScenariosLoaded && Array.isArray(selectedOffer.creatorKit?.scenarios);
     setScenariosLoaded(Boolean(loadedScenarios));
+    setScenarioErrors({});
     setScenarioDrafts(loadedScenarios ? selectedOffer.creatorKit.scenarios.map((scenario) => ({
       channel: scenarioChannelValues[scenario.channel] || scenario.channel,
       title: scenario.title || "",
@@ -1756,6 +1758,25 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
 
   const saveScenarios = async () => {
     if (!selectedOffer || !scenariosLoaded) return;
+    const errors = {};
+    scenarioDrafts.forEach((scenario, index) => {
+      const titleLength = String(scenario.title || "").trim().length;
+      const ideaLength = String(scenario.idea || "").trim().length;
+      if (titleLength < 3 || titleLength > 200 || ideaLength < 10 || ideaLength > 5000) {
+        errors[index] = {
+          ...(titleLength < 3 ? { title: "Название должно содержать минимум 3 символа." } : {}),
+          ...(titleLength > 200 ? { title: "Название не должно превышать 200 символов." } : {}),
+          ...(ideaLength < 10 ? { idea: "Идея должна содержать минимум 10 символов." } : {}),
+          ...(ideaLength > 5000 ? { idea: "Идея не должна превышать 5000 символов." } : {})
+        };
+      }
+    });
+    if (Object.keys(errors).length) {
+      setScenarioErrors(errors);
+      notify("Проверьте поля сценариев");
+      return;
+    }
+    setScenarioErrors({});
     setSavingScenarios(true);
     try {
       await onSaveScenarios(selectedOffer.id, scenarioDrafts);
@@ -1797,7 +1818,15 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
           <section className="creator-kit-form-block panel">
             {scenariosLoaded ? (
               <>
-                <ScenarioEditor scenarios={scenarioDrafts} onChange={setScenarioDrafts} disabled={savingScenarios} />
+                <ScenarioEditor
+                  scenarios={scenarioDrafts}
+                  errors={scenarioErrors}
+                  onChange={(nextScenarios) => {
+                    setScenarioDrafts(nextScenarios);
+                    setScenarioErrors({});
+                  }}
+                  disabled={savingScenarios}
+                />
                 <div className="form-actions">
                   <button className="button" type="button" onClick={saveScenarios} disabled={savingScenarios}>
                     {savingScenarios ? "Сохранение…" : "Сохранить сценарии"}
@@ -2760,7 +2789,7 @@ function creatorKitPayload(kit) {
   };
 }
 
-function ScenarioEditor({ scenarios, onChange, disabled = false, emptyMessage = "Сценариев пока нет. Добавьте первый сценарий." }) {
+function ScenarioEditor({ scenarios, errors = {}, onChange, disabled = false, emptyMessage = "Сценариев пока нет. Добавьте первый сценарий." }) {
   const updateScenario = (index, key, value) => {
     onChange(scenarios.map((scenario, scenarioIndex) => (
       scenarioIndex === index ? { ...scenario, [key]: value } : scenario
@@ -2814,10 +2843,12 @@ function ScenarioEditor({ scenarios, onChange, disabled = false, emptyMessage = 
               <div className="form-group full">
                 <label className="form-label">Название сценария</label>
                 <input className="field" value={scenario.title} minLength={3} maxLength={200} disabled={disabled} onChange={(event) => updateScenario(index, "title", event.target.value)} placeholder="Например: Три факта о продукте" />
+                {errors[index]?.title && <span className="form-error">{errors[index].title}</span>}
               </div>
               <div className="form-group full">
                 <label className="form-label">Идея</label>
                 <textarea className="textarea" value={scenario.idea} minLength={10} maxLength={5000} disabled={disabled} onChange={(event) => updateScenario(index, "idea", event.target.value)} placeholder="Опишите, как креатор может адаптировать эту идею." />
+                {errors[index]?.idea && <span className="form-error">{errors[index].idea}</span>}
               </div>
               <label className={`checkbox-inline ${scenario.requiresAffiliateApproval ? "checked" : ""}`}>
                 <input type="checkbox" checked={scenario.requiresAffiliateApproval} disabled={disabled} onChange={(event) => updateScenario(index, "requiresAffiliateApproval", event.target.checked)} />
