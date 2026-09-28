@@ -1672,12 +1672,15 @@ function SalesTrackingLive({ notify, preview, onUpload, onConfirm }) {
   );
 }
 
-function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview }) {
+function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview, onSaveScenarios }) {
   const brandOffers = offers;
   const [selectedOfferId, setSelectedOfferId] = useState(brandOffers[0] ? brandOffers[0].id : null);
   const [preview, setPreview] = useState(false);
   const [previewAccess, setPreviewAccess] = useState("digital");
   const [previewKit, setPreviewKit] = useState(null);
+  const [scenarioDrafts, setScenarioDrafts] = useState([]);
+  const [scenariosLoaded, setScenariosLoaded] = useState(false);
+  const [savingScenarios, setSavingScenarios] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadForm, setUploadForm] = useState({
     file: null,
@@ -1695,10 +1698,29 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
   const kit = selectedOffer
     ? (preview && previewKit ? previewKit : selectedOffer.creatorKit || buildCreatorKit(selectedOffer))
     : null;
-  const displayedOffer = selectedOffer ? { ...selectedOffer, creatorKit: kit } : null;
+  const displayedOffer = selectedOffer
+    ? {
+        ...selectedOffer,
+        creatorKit: kit
+          ? { ...kit, scenarios: preview ? (kit.scenarios || []) : scenariosLoaded ? scenarioDrafts : [] }
+          : null
+      }
+    : null;
   const uploadAllowed = verificationStatus === "VERIFIED";
 
   const updateUpload = (key, value) => setUploadForm((current) => ({ ...current, [key]: value }));
+
+  useEffect(() => {
+    const loadedScenarios = selectedOffer?.creatorKitScenariosLoaded && Array.isArray(selectedOffer.creatorKit?.scenarios);
+    setScenariosLoaded(Boolean(loadedScenarios));
+    setScenarioDrafts(loadedScenarios ? selectedOffer.creatorKit.scenarios.map((scenario) => ({
+      channel: scenarioChannelValues[scenario.channel] || scenario.channel,
+      title: scenario.title || "",
+      idea: scenario.idea || "",
+      accessLevel: scenario.accessLevel || "DIGITAL",
+      requiresAffiliateApproval: Boolean(scenario.requiresAffiliateApproval)
+    })) : []);
+  }, [selectedOffer?.id, selectedOffer?.creatorKitScenariosLoaded, selectedOffer?.creatorKit?.scenarios]);
 
   const loadPreview = async (access = previewAccess) => {
     if (!selectedOffer) return;
@@ -1732,6 +1754,16 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
     }
   };
 
+  const saveScenarios = async () => {
+    if (!selectedOffer || !scenariosLoaded) return;
+    setSavingScenarios(true);
+    try {
+      await onSaveScenarios(selectedOffer.id, scenarioDrafts);
+    } finally {
+      setSavingScenarios(false);
+    }
+  };
+
   if (!selectedOffer) return <div className="empty-state">Создайте оффер, чтобы заполнить Creator Kit.</div>;
 
   return (
@@ -1761,7 +1793,25 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
       </div>
 
       {!preview && (
-        <form className="creator-kit-upload panel" onSubmit={submitUpload}>
+        <>
+          <section className="creator-kit-form-block panel">
+            {scenariosLoaded ? (
+              <>
+                <ScenarioEditor scenarios={scenarioDrafts} onChange={setScenarioDrafts} disabled={savingScenarios} />
+                <div className="form-actions">
+                  <button className="button" type="button" onClick={saveScenarios} disabled={savingScenarios}>
+                    {savingScenarios ? "Сохранение…" : "Сохранить сценарии"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="creator-warning compact-warning">
+                <span className="warning-mark">!</span>
+                <strong>Сценарии Creator Kit не загружены. Редактор не подставляет демонстрационные данные.</strong>
+              </div>
+            )}
+          </section>
+          <form className="creator-kit-upload panel" onSubmit={submitUpload}>
           <div className="panel-header"><div><h2>Добавить материал</h2><p>Файл загружается напрямую в приватное хранилище и подтверждается сервером.</p></div></div>
           {!uploadAllowed && (
             <div className="creator-warning compact-warning">
@@ -1795,7 +1845,8 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
             </div>
           </div>
           <div className="form-actions"><button className="button" type="submit" disabled={uploading || !uploadAllowed}>{uploading ? "Загрузка…" : "Загрузить материал"}</button></div>
-        </form>
+          </form>
+        </>
       )}
 
       {preview && (
@@ -1979,7 +2030,7 @@ function BrandTeamPanel({ managers, invitations, onInvite, onRevokeInvitation, o
   );
 }
 
-function BrandDashboard({ user, role, managerBrands, activeBrandId, onSelectManagerBrand, offers, applications, relationships, finance, orderImportPreview, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview, transitionOffer, onUploadOrders, onConfirmOrders, canManageTeam, teamManagers, teamInvitations, onInviteManager, onRevokeInvitation, onRemoveManager, onChangeOfferManager, onChangeRelationshipManager }) {
+function BrandDashboard({ user, role, managerBrands, activeBrandId, onSelectManagerBrand, offers, applications, relationships, finance, orderImportPreview, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview, onSaveScenarios, transitionOffer, onUploadOrders, onConfirmOrders, canManageTeam, teamManagers, teamInvitations, onInviteManager, onRevokeInvitation, onRemoveManager, onChangeOfferManager, onChangeRelationshipManager }) {
   const [tab, setTab] = useState("offers");
   const [offerFilter, setOfferFilter] = useState("all");
   const [relationshipFilter, setRelationshipFilter] = useState("all");
@@ -2242,12 +2293,22 @@ function BrandDashboard({ user, role, managerBrands, activeBrandId, onSelectMana
       )}
 
       {tab === "tracking" && <SalesTrackingLive notify={notify} preview={orderImportPreview} onUpload={onUploadOrders} onConfirm={onConfirmOrders} />}
-      {tab === "creatorKit" && <BrandCreatorKitManager offers={offers} verificationStatus={user?.profile?.verificationStatus} notify={notify} onToggleAsset={onToggleAsset} onDownloadAsset={onDownloadAsset} onUploadAsset={onUploadAsset} onLoadPreview={onLoadPreview} />}
+      {tab === "creatorKit" && <BrandCreatorKitManager offers={offers} verificationStatus={user?.profile?.verificationStatus} notify={notify} onToggleAsset={onToggleAsset} onDownloadAsset={onDownloadAsset} onUploadAsset={onUploadAsset} onLoadPreview={onLoadPreview} onSaveScenarios={onSaveScenarios} />}
     </DashboardLayout>
   );
 }
 
 function CreateOfferPage({ publish, navigate, initialOffer, managers, onChangeOfferManager }) {
+  const scenariosLoaded = !initialOffer || Array.isArray(initialOffer.creatorKit?.scenarios);
+  const defaultScenarios = scenariosLoaded && initialOffer?.creatorKit?.scenarios
+    ? initialOffer.creatorKit.scenarios.map((scenario) => ({
+        channel: scenarioChannelValues[scenario.channel] || scenario.channel,
+        title: scenario.title,
+        idea: scenario.idea,
+        accessLevel: scenario.accessLevel || "DIGITAL",
+        requiresAffiliateApproval: Boolean(scenario.requiresAffiliateApproval)
+      }))
+    : [];
   const [form, setForm] = useState({
     title: initialOffer?.title || "Набор для ночного ухода Renewal",
     category: initialOffer?.category || "Красота и уход",
@@ -2261,7 +2322,8 @@ function CreateOfferPage({ publish, navigate, initialOffer, managers, onChangeOf
     allowedDigitalFormats: initialOffer?.creatorKit?.allowedDigitalFormats || [...digitalFormats],
     allowedClaims: "Подходит для ежедневного ухода; бренд указывает в составе…",
     forbiddenClaims: "Я протестировала и рекомендую; гарантированно решает проблему",
-    publicationRequirements: "Указать название и цену, добавить маркировку рекламы, упомянуть @lunea."
+    publicationRequirements: "Указать название и цену, добавить маркировку рекламы, упомянуть @lunea.",
+    scenarios: defaultScenarios
   });
 
   const update = (key, value) => setForm({ ...form, [key]: value });
@@ -2288,9 +2350,11 @@ function CreateOfferPage({ publish, navigate, initialOffer, managers, onChangeOf
       ...buildCreatorKit(previewBase),
       promotionWithoutSample: form.promotionWithoutSample,
       allowedDigitalFormats: form.allowedDigitalFormats,
+      scenarios: form.scenarios,
       allowedClaims: form.allowedClaims.split(";").map((item) => item.trim()).filter(Boolean),
       forbiddenClaims: form.forbiddenClaims.split(";").map((item) => item.trim()).filter(Boolean)
-    }
+    },
+    creatorKitScenariosLoaded: scenariosLoaded
   };
 
   return (
@@ -2383,10 +2447,14 @@ function CreateOfferPage({ publish, navigate, initialOffer, managers, onChangeOf
               </div>
 
               <div className="creator-kit-form-block">
-                <div><h3>Сценарии и банк фактов</h3><p>Сценарии показываются как идеи, которые креатор адаптирует под свой стиль.</p></div>
-                <div className="format-chips">
-                  {["Reels", "Stories", "Telegram", "Threads", "Пост", "Короткий обзор", "Подборка"].map((item) => <span key={item}>{item}</span>)}
-                </div>
+                {!scenariosLoaded && initialOffer ? (
+                  <div className="creator-warning compact-warning">
+                    <span className="warning-mark">!</span>
+                    <strong>Сценарии этого Creator Kit ещё не загружены. Сохранение Offer не изменит их.</strong>
+                  </div>
+                ) : (
+                  <ScenarioEditor scenarios={form.scenarios} onChange={(scenarios) => update("scenarios", scenarios)} disabled={!scenariosLoaded} />
+                )}
                 <div className="form-grid compact-form-grid">
                   <div className="form-group"><label className="form-label">Факты о продукте</label><textarea className="textarea" value="Описание, преимущества, состав, применение, цена, объём, производство, аудитория и ограничения" readOnly /></div>
                   <div className="form-group"><label className="form-label">Требования к публикации</label><textarea className="textarea" value={form.publicationRequirements} onChange={(e) => update("publicationRequirements", e.target.value)} /></div>
@@ -2623,7 +2691,8 @@ function toUiOffer(offer, creatorKitResponse = null) {
     promotionWithoutProduct: offer.promotionWithoutProduct,
     allowedPromotionFormats: offer.allowedPromotionFormats || [],
     currentManagerId: offer.currentManagerId || null,
-    currentManager: offer.currentManager || null
+    currentManager: offer.currentManager || null,
+    creatorKitScenariosLoaded: Boolean(creatorKitResponse && Array.isArray(creatorKitResponse.scenarios))
   };
   const creatorKit = creatorKitResponse
     ? mapCreatorKit(creatorKitResponse, offer)
@@ -2677,10 +2746,8 @@ function RelationshipManagerSelect({ relationship, managers, onChange }) {
 }
 
 const scenarioChannelValues = Object.fromEntries(Object.entries(scenarioChannelLabels).map(([key, value]) => [value, key]));
-const factTypeValues = Object.fromEntries(Object.entries(factTypeLabels).map(([key, value]) => [value, key]));
 
 function creatorKitPayload(kit) {
-  const requirements = kit.publicationRequirements || {};
   return {
     scenarios: (kit.scenarios || []).map((scenario, index) => ({
       channel: scenarioChannelValues[scenario.channel] || scenario.channel,
@@ -2689,26 +2756,80 @@ function creatorKitPayload(kit) {
       accessLevel: scenario.accessLevel || "DIGITAL",
       requiresAffiliateApproval: scenario.requiresAffiliateApproval || false,
       sortOrder: index
-    })),
-    facts: Object.entries(kit.facts || {}).filter(([, value]) => value).map(([label, value], index) => ({
-      type: factTypeValues[label] || label,
-      value: String(value),
-      sortOrder: index
-    })),
-    claims: [
-      ...(kit.allowedClaims || []).map((value, index) => ({ type: "ALLOWED", value, sortOrder: index })),
-      ...(kit.forbiddenClaims || []).map((value, index) => ({ type: "FORBIDDEN", value, sortOrder: index }))
-    ],
-    rules: (kit.noSampleRules || []).map((value, index) => ({ value, sortOrder: index })),
-    publicationRequirements: {
-      mandatoryMentions: requirements["Обязательные упоминания"] ? [requirements["Обязательные упоминания"]] : [],
-      advertisingLabel: requirements["Маркировка рекламы"] || undefined,
-      hashtags: requirements["Хэштеги"] ? requirements["Хэштеги"].split(/\s+/).filter(Boolean) : [],
-      brandMention: requirements["Упоминание бренда"] || undefined,
-      approvalRequired: requirements["Согласование"]?.toLowerCase().includes("нужно") || requirements["Согласование"] === "Требуется",
-      allowedPlatforms: requirements["Разрешённые площадки"] ? requirements["Разрешённые площадки"].split(",").map((item) => item.trim()).filter(Boolean) : []
-    }
+    }))
   };
+}
+
+function ScenarioEditor({ scenarios, onChange, disabled = false, emptyMessage = "Сценариев пока нет. Добавьте первый сценарий." }) {
+  const updateScenario = (index, key, value) => {
+    onChange(scenarios.map((scenario, scenarioIndex) => (
+      scenarioIndex === index ? { ...scenario, [key]: value } : scenario
+    )));
+  };
+
+  const addScenario = () => {
+    onChange([
+      ...scenarios,
+      {
+        channel: "REELS",
+        title: "",
+        idea: "",
+        accessLevel: "DIGITAL",
+        requiresAffiliateApproval: false
+      }
+    ]);
+  };
+
+  const removeScenario = (index) => {
+    onChange(scenarios.filter((_, scenarioIndex) => scenarioIndex !== index));
+  };
+
+  return (
+    <>
+      <div className="panel-header">
+        <div><h3>Сценарии</h3><p>Добавьте идеи, которые креатор сможет адаптировать под свой стиль.</p></div>
+        <button className="button secondary small" type="button" onClick={addScenario} disabled={disabled}>＋ Добавить сценарий</button>
+      </div>
+      <div className="scenario-editor-list">
+        {scenarios.map((scenario, index) => (
+          <div className="scenario-editor-row" key={scenario.id || `scenario-${index}`}>
+            <div className="scenario-editor-row-head">
+              <strong>Сценарий {index + 1}</strong>
+              <button className="text-button danger" type="button" onClick={() => removeScenario(index)} disabled={disabled}>Удалить</button>
+            </div>
+            <div className="form-grid compact-form-grid">
+              <div className="form-group">
+                <label className="form-label">Канал</label>
+                <select className="select-field" value={scenario.channel} disabled={disabled} onChange={(event) => updateScenario(index, "channel", event.target.value)}>
+                  {Object.entries(scenarioChannelLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Уровень доступа</label>
+                <select className="select-field" value={scenario.accessLevel} disabled={disabled} onChange={(event) => updateScenario(index, "accessLevel", event.target.value)}>
+                  <option value="DIGITAL">Digital Access</option>
+                  <option value="PRODUCT">Product Access</option>
+                </select>
+              </div>
+              <div className="form-group full">
+                <label className="form-label">Название сценария</label>
+                <input className="field" value={scenario.title} minLength={3} maxLength={200} disabled={disabled} onChange={(event) => updateScenario(index, "title", event.target.value)} placeholder="Например: Три факта о продукте" />
+              </div>
+              <div className="form-group full">
+                <label className="form-label">Идея</label>
+                <textarea className="textarea" value={scenario.idea} minLength={10} maxLength={5000} disabled={disabled} onChange={(event) => updateScenario(index, "idea", event.target.value)} placeholder="Опишите, как креатор может адаптировать эту идею." />
+              </div>
+              <label className={`checkbox-inline ${scenario.requiresAffiliateApproval ? "checked" : ""}`}>
+                <input type="checkbox" checked={scenario.requiresAffiliateApproval} disabled={disabled} onChange={(event) => updateScenario(index, "requiresAffiliateApproval", event.target.checked)} />
+                <span>Только для одобренных партнёров</span>
+              </label>
+            </div>
+          </div>
+        ))}
+        {!scenarios.length && <div className="empty-state">{emptyMessage}</div>}
+      </div>
+    </>
+  );
 }
 
 function ManagerInvitationPage({ token, user, role, navigate, notify, onAcceptExisting }) {
@@ -3661,16 +3782,32 @@ function App() {
           ...payload
         })
       });
-      await api(`/brand/offers/${saved.id}/creator-kit`, {
-        method: "PUT",
-        body: JSON.stringify(creatorKitPayload(offer.creatorKit))
-      });
+      if (!existingOfferId || offer.creatorKitScenariosLoaded) {
+        await api(`/brand/offers/${saved.id}/creator-kit`, {
+          method: "PUT",
+          body: JSON.stringify(creatorKitPayload(offer.creatorKit))
+        });
+      }
       if (shouldPublish) await api(`/brand/offers/${saved.id}/publish`, { method: "POST" });
       await loadOffers(role);
       notify(shouldPublish ? "Оффер сохранён и опубликован" : "Черновик сохранён");
       navigate("brand");
     } catch (error) {
       notify(error.message);
+    }
+  };
+
+  const saveCreatorKitScenarios = async (offerId, scenarios) => {
+    try {
+      await api(`/brand/offers/${offerId}/creator-kit`, {
+        method: "PUT",
+        body: JSON.stringify(creatorKitPayload({ scenarios }))
+      });
+      await loadOffers(role);
+      notify("Сценарии сохранены");
+    } catch (error) {
+      notify(error.message);
+      throw error;
     }
   };
 
@@ -3773,9 +3910,9 @@ function App() {
       {page === "register" && <RegisterPage presetRole={registerRole} complete={completeRegistration} navigate={navigate} />}
       {page === "login" && <LoginPage login={login} verifyMfa={verifyMfa} navigate={navigate} />}
       {page === "creator" && role === "creator" && <CreatorDashboard user={user} applications={applications} relationships={relationships} offers={offers} finance={creatorFinance} cancelApplication={cancelApplication} copyValue={copyValue} navigate={navigate} />}
-      {page === "brand" && role === "brand" && <BrandDashboard user={user} role={role} managerBrands={[]} activeBrandId={null} onSelectManagerBrand={() => {}} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} onChangeRelationshipManager={changeRelationshipManager} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} canManageTeam teamManagers={teamManagers} teamInvitations={teamInvitations} onInviteManager={inviteManager} onRevokeInvitation={revokeInvitation} onRemoveManager={removeManager} />}
+      {page === "brand" && role === "brand" && <BrandDashboard user={user} role={role} managerBrands={[]} activeBrandId={null} onSelectManagerBrand={() => {}} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} onChangeRelationshipManager={changeRelationshipManager} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} onSaveScenarios={saveCreatorKitScenarios} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} canManageTeam teamManagers={teamManagers} teamInvitations={teamInvitations} onInviteManager={inviteManager} onRevokeInvitation={revokeInvitation} onRemoveManager={removeManager} />}
       {["manager", "brand", "create"].includes(page) && role === "manager" && !activeBrandId && <ManagerBrandSelector brands={managerBrands} activeBrandId={activeBrandId} onSelect={selectManagerBrand} />}
-      {page === "brand" && role === "manager" && activeBrandId && <BrandDashboard user={brandDashboardUser} role={role} managerBrands={managerBrands} activeBrandId={activeBrandId} onSelectManagerBrand={selectManagerBrand} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} onChangeRelationshipManager={changeRelationshipManager} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} teamManagers={teamManagers} />}
+      {page === "brand" && role === "manager" && activeBrandId && <BrandDashboard user={brandDashboardUser} role={role} managerBrands={managerBrands} activeBrandId={activeBrandId} onSelectManagerBrand={selectManagerBrand} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} onChangeRelationshipManager={changeRelationshipManager} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} onSaveScenarios={saveCreatorKitScenarios} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} teamManagers={teamManagers} />}
       {page === "create" && ["brand", "manager"].includes(role) && (role !== "manager" || activeBrandId) && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} managers={teamManagers} onChangeOfferManager={changeOfferManager} />}
       {page === "admin" && role === "admin" && <AdminDashboard user={user} offers={offers} brands={adminBrands} operationalReadiness={operationalReadiness} finance={adminFinance} createPayout={createPayout} approvePayout={approvePayout} markPayoutPaid={markPayoutPaid} cancelPayout={cancelPayout} verifyBrand={verifyBrand} changeAdminPassword={changeAdminPassword} beginAdminMfa={beginAdminMfa} confirmAdminMfa={confirmAdminMfa} />}
       {toast && <div className="toast" role="status">{toast}</div>}

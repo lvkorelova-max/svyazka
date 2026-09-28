@@ -2281,6 +2281,45 @@ p {
   font-size: 11px;
 }
 
+.scenario-editor-list {
+  display: grid;
+  gap: 12px;
+}
+
+.scenario-editor-row {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+}
+
+.scenario-editor-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.scenario-editor-row-head strong {
+  font-size: 13px;
+}
+
+.scenario-editor-row .compact-form-grid {
+  margin-top: 0;
+}
+
+.checkbox-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.checkbox-inline input {
+  accent-color: var(--accent);
+}
+
 .material-type-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
