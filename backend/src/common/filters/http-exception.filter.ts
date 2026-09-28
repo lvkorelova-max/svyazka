@@ -9,6 +9,35 @@ import { Prisma } from '@prisma/client';
 import { Request, Response } from 'express';
 import { RequestContext } from '../request-context';
 
+function safePrismaMeta(meta: unknown) {
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return undefined;
+
+  const allowedKeys = [
+    'target',
+    'modelName',
+    'field_name',
+    'constraint',
+    'table',
+    'column',
+    'relation_name',
+  ];
+  const safe: Record<string, string | string[]> = {};
+
+  for (const key of allowedKeys) {
+    const value = (meta as Record<string, unknown>)[key];
+    if (typeof value === 'string') {
+      safe[key] = value.slice(0, 200);
+    } else if (
+      Array.isArray(value) &&
+      value.every((item) => typeof item === 'string')
+    ) {
+      safe[key] = value.slice(0, 20).map((item) => item.slice(0, 200));
+    }
+  }
+
+  return Object.keys(safe).length ? safe : undefined;
+}
+
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost) {
@@ -36,6 +65,17 @@ export class HttpExceptionFilter implements ExceptionFilter {
     });
 
     if (status >= 500) {
+      const prismaDiagnostics =
+        exception instanceof Prisma.PrismaClientKnownRequestError
+          ? {
+              code: exception.code,
+              message: exception.message,
+              ...(safePrismaMeta(exception.meta)
+                ? { meta: safePrismaMeta(exception.meta) }
+                : {}),
+            }
+          : undefined;
+
       process.stderr.write(
         `${JSON.stringify({
           timestamp: new Date().toISOString(),
@@ -46,6 +86,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
           path: request.url,
           statusCode: status,
           error: exception instanceof Error ? exception.name : 'UnknownError',
+          ...(prismaDiagnostics ? { prisma: prismaDiagnostics } : {}),
         })}\n`,
       );
     }
