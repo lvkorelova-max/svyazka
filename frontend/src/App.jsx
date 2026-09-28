@@ -2354,6 +2354,7 @@ function CreateOfferPage({ publish, navigate, initialOffer, managers, onChangeOf
     publicationRequirements: "Указать название и цену, добавить маркировку рекламы, упомянуть @lunea.",
     scenarios: defaultScenarios
   });
+  const [scenarioErrors, setScenarioErrors] = useState({});
 
   const update = (key, value) => setForm({ ...form, [key]: value });
   const toggleFormat = (format) => {
@@ -2384,6 +2385,23 @@ function CreateOfferPage({ publish, navigate, initialOffer, managers, onChangeOf
       forbiddenClaims: form.forbiddenClaims.split(";").map((item) => item.trim()).filter(Boolean)
     },
     creatorKitScenariosLoaded: scenariosLoaded
+  };
+  const validateScenarios = () => {
+    const errors = {};
+    form.scenarios.forEach((scenario, index) => {
+      const titleLength = String(scenario.title || "").trim().length;
+      const ideaLength = String(scenario.idea || "").trim().length;
+      if (titleLength < 3 || titleLength > 200 || ideaLength < 10 || ideaLength > 5000) {
+        errors[index] = {
+          ...(titleLength < 3 ? { title: "Название должно содержать минимум 3 символа." } : {}),
+          ...(titleLength > 200 ? { title: "Название не должно превышать 200 символов." } : {}),
+          ...(ideaLength < 10 ? { idea: "Идея должна содержать минимум 10 символов." } : {}),
+          ...(ideaLength > 5000 ? { idea: "Идея не должна превышать 5000 символов." } : {})
+        };
+      }
+    });
+    setScenarioErrors(errors);
+    return Object.keys(errors).length === 0;
   };
 
   return (
@@ -2482,7 +2500,15 @@ function CreateOfferPage({ publish, navigate, initialOffer, managers, onChangeOf
                     <strong>Сценарии этого Creator Kit ещё не загружены. Сохранение Offer не изменит их.</strong>
                   </div>
                 ) : (
-                  <ScenarioEditor scenarios={form.scenarios} onChange={(scenarios) => update("scenarios", scenarios)} disabled={!scenariosLoaded} />
+                  <ScenarioEditor
+                    scenarios={form.scenarios}
+                    errors={scenarioErrors}
+                    onChange={(scenarios) => {
+                      update("scenarios", scenarios);
+                      setScenarioErrors({});
+                    }}
+                    disabled={!scenariosLoaded}
+                  />
                 )}
                 <div className="form-grid compact-form-grid">
                   <div className="form-group"><label className="form-label">Факты о продукте</label><textarea className="textarea" value="Описание, преимущества, состав, применение, цена, объём, производство, аудитория и ограничения" readOnly /></div>
@@ -2498,8 +2524,8 @@ function CreateOfferPage({ publish, navigate, initialOffer, managers, onChangeOf
               </div>
             </section>
             <div className="form-actions">
-              {(!initialOffer || initialOffer.apiStatus === "DRAFT") && <button className="button secondary" onClick={() => publish(previewOffer, false, initialOffer?.id)}>Сохранить черновик</button>}
-              <button className="button" onClick={() => publish(previewOffer, !initialOffer || initialOffer.apiStatus === "DRAFT", initialOffer?.id)}>
+              {(!initialOffer || initialOffer.apiStatus === "DRAFT") && <button className="button secondary" onClick={() => validateScenarios() && publish(previewOffer, false, initialOffer?.id)}>Сохранить черновик</button>}
+              <button className="button" onClick={() => validateScenarios() && publish(previewOffer, !initialOffer || initialOffer.apiStatus === "DRAFT", initialOffer?.id)}>
                 {initialOffer && initialOffer.apiStatus !== "DRAFT" ? "Сохранить изменения" : "Опубликовать оффер"}
               </button>
             </div>
