@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -11,6 +12,7 @@ import {
   CreatorKitAccessLevel,
   CreatorKitAssetStatus,
   CreatorKitAssetType,
+  CreatorKitRevisionStatus,
   OfferStatus,
   Prisma,
   PromotionWithoutProduct,
@@ -21,16 +23,17 @@ import { PrismaService } from '../prisma/prisma.service';
 import { BrandAccessService } from '../brand-access/brand-access.service';
 import { S3StorageService } from '../storage/storage.service';
 import { InitCreatorKitUploadDto } from './dto/init-upload.dto';
-import { UpsertCreatorKitDto } from './dto/upsert-creator-kit.dto';
+import { PublishCreatorKitDto, UpsertCreatorKitDto } from './dto/upsert-creator-kit.dto';
 
-const KIT_INCLUDE = {
-  assets: { orderBy: { createdAt: 'asc' as const } },
+const REVISION_INCLUDE = {
+  brandContent: true,
+  productContent: true,
   scenarios: { orderBy: { sortOrder: 'asc' as const } },
   facts: { orderBy: { sortOrder: 'asc' as const } },
   claims: { orderBy: { sortOrder: 'asc' as const } },
   rules: { orderBy: { sortOrder: 'asc' as const } },
   publicationRequirements: true,
-} satisfies Prisma.CreatorKitInclude;
+} satisfies Prisma.CreatorKitRevisionInclude;
 
 const MIME_EXTENSIONS: Record<string, string[]> = {
   'image/jpeg': ['jpg', 'jpeg'],
@@ -68,53 +71,145 @@ export class CreatorKitService {
   async getBrandKit(userId: string, offerId: string, activeBrandId?: string) {
     const offer = await this.getOwnedOffer(userId, offerId, activeBrandId);
     const kit = await this.ensureKit(offer.id);
-    return this.present(kit, offer, false);
+    const revision =
+      kit.draftRevisionId || kit.activeRevisionId
+        ? await this.getPreferredRevision(kit)
+        : await this.ensureDraft(userId, offer);
+    return this.present(this.composeKit(kit, revision), offer, false);
   }
 
   async updateBrandKit(userId: string, offerId: string, dto: UpsertCreatorKitDto, activeBrandId?: string) {
     const offer = await this.getOwnedOffer(userId, offerId, activeBrandId);
-    const kit = await this.ensureKit(offer.id);
+    const draft = await this.ensureDraft(userId, offer);
     await this.prisma.$transaction(async (tx) => {
       if (dto.scenarios) {
-        await tx.creatorKitScenario.deleteMany({ where: { creatorKitId: kit.id } });
+        await tx.creatorKitScenario.deleteMany({ where: { revisionId: draft.id } });
         if (dto.scenarios.length) {
           await tx.creatorKitScenario.createMany({
-            data: dto.scenarios.map((item) => ({ ...item, creatorKitId: kit.id })),
+            data: dto.scenarios.map((item) => ({
+              revisionId: draft.id,
+              channel: item.channel,
+              title: item.title.trim(),
+              mainIdea: item.idea.trim(),
+              accessLevel: item.accessLevel,
+              requiresAffiliateApproval: item.requiresAffiliateApproval ?? false,
+              sortOrder: item.sortOrder,
+            })),
           });
         }
       }
       if (dto.facts) {
-        await tx.creatorKitFact.deleteMany({ where: { creatorKitId: kit.id } });
+        await tx.creatorKitFact.deleteMany({ where: { revisionId: draft.id } });
         if (dto.facts.length) {
           await tx.creatorKitFact.createMany({
-            data: dto.facts.map((item) => ({ ...item, creatorKitId: kit.id })),
+            data: dto.facts.map((item) => ({
+              revisionId: draft.id,
+              type: item.type,
+              value: item.value.trim(),
+              accessLevel: CreatorKitAccessLevel.DIGITAL,
+              requiresAffiliateApproval: false,
+              sortOrder: item.sortOrder,
+            })),
           });
         }
       }
       if (dto.claims) {
-        await tx.creatorKitClaim.deleteMany({ where: { creatorKitId: kit.id } });
+        await tx.creatorKitClaim.deleteMany({ where: { revisionId: draft.id } });
         if (dto.claims.length) {
           await tx.creatorKitClaim.createMany({
-            data: dto.claims.map((item) => ({ ...item, creatorKitId: kit.id })),
+            data: dto.claims.map((item) => ({
+              revisionId: draft.id,
+              type: item.type,
+              value: item.value.trim(),
+              accessLevel: CreatorKitAccessLevel.DIGITAL,
+              requiresAffiliateApproval: false,
+              sortOrder: item.sortOrder,
+            })),
           });
         }
       }
       if (dto.rules) {
-        await tx.creatorKitRule.deleteMany({ where: { creatorKitId: kit.id } });
+        await tx.creatorKitRule.deleteMany({ where: { revisionId: draft.id } });
         if (dto.rules.length) {
           await tx.creatorKitRule.createMany({
-            data: dto.rules.map((item) => ({ ...item, creatorKitId: kit.id })),
+            data: dto.rules.map((item) => ({
+              revisionId: draft.id,
+              value: item.value.trim(),
+              accessLevel: CreatorKitAccessLevel.DIGITAL,
+              requiresAffiliateApproval: false,
+              sortOrder: item.sortOrder,
+            })),
           });
         }
       }
       if (dto.publicationRequirements) {
         await tx.publicationRequirements.upsert({
-          where: { creatorKitId: kit.id },
+          where: { revisionId: draft.id },
           update: dto.publicationRequirements,
-          create: { ...dto.publicationRequirements, creatorKitId: kit.id },
+          create: {
+            ...dto.publicationRequirements,
+            revisionId: draft.id,
+            accessLevel: CreatorKitAccessLevel.DIGITAL,
+            requiresAffiliateApproval: false,
+          },
         });
       }
     });
+    return this.getBrandKit(userId, offerId, activeBrandId);
+  }
+
+  async publish(
+    userId: string,
+    offerId: string,
+    dto: PublishCreatorKitDto,
+    activeBrandId?: string,
+  ) {
+    const offer = await this.getOwnedOffer(userId, offerId, activeBrandId);
+    const kit = await this.ensureKit(offer.id);
+    if (!kit.draftRevisionId) {
+      throw new BadRequestException('Нет черновика для публикации');
+    }
+    const draft = await this.loadRevision(kit.draftRevisionId);
+    if (draft.status !== CreatorKitRevisionStatus.DRAFT) {
+      throw new ConflictException('Версия для публикации больше не является черновиком');
+    }
+
+    const composed = this.composeKit(kit, draft);
+    const completion = this.completeness(composed);
+    const snapshot = this.buildRevisionSnapshot(composed);
+    const now = new Date();
+
+    await this.prisma.$transaction(async (tx) => {
+      if (kit.activeRevisionId) {
+        await tx.creatorKitRevision.updateMany({
+          where: {
+            id: kit.activeRevisionId,
+            status: CreatorKitRevisionStatus.PUBLISHED,
+          },
+          data: { status: CreatorKitRevisionStatus.SUPERSEDED },
+        });
+      }
+      await tx.creatorKitRevision.update({
+        where: { id: draft.id },
+        data: {
+          status: CreatorKitRevisionStatus.PUBLISHED,
+          snapshot,
+          publisherNote: dto.publisherNote?.trim() || null,
+          completenessPercent: completion.percent,
+          completenessDetails: completion,
+          publishedByUserId: userId,
+          publishedAt: now,
+        },
+      });
+      await tx.creatorKit.update({
+        where: { id: kit.id },
+        data: {
+          activeRevisionId: draft.id,
+          draftRevisionId: null,
+        },
+      });
+    });
+
     return this.getBrandKit(userId, offerId, activeBrandId);
   }
 
@@ -126,7 +221,12 @@ export class CreatorKitService {
   ) {
     const offer = await this.getOwnedOffer(userId, offerId, activeBrandId);
     const kit = await this.ensureKit(offer.id);
-    return this.present(this.filterKit(kit, offer, accessLevel, true), offer, true);
+    const revision = await this.getPreferredRevision(kit);
+    return this.present(
+      this.filterKit(this.composeKit(kit, revision), offer, accessLevel, true),
+      offer,
+      true,
+    );
   }
 
   async getCreatorKit(userId: string, offerId: string) {
@@ -137,9 +237,11 @@ export class CreatorKitService {
     if (!offer) throw new NotFoundException('Опубликованный оффер не найден');
     const kit = await this.prisma.creatorKit.findUnique({
       where: { offerId },
-      include: KIT_INCLUDE,
+      include: { assets: { orderBy: { createdAt: 'asc' } } },
     });
     if (!kit) throw new NotFoundException('Creator Kit ещё не заполнен');
+    if (!kit.activeRevisionId) throw new NotFoundException('Creator Kit ещё не опубликован');
+    const revision = await this.loadRevision(kit.activeRevisionId);
     const hasActiveRelationship = Boolean(
       await this.prisma.affiliateRelationship.findFirst({
         where: {
@@ -152,7 +254,7 @@ export class CreatorKitService {
     );
     return this.present(
       this.filterKit(
-        kit,
+        this.composeKit(kit, revision),
         offer,
         CreatorKitAccessLevel.DIGITAL,
         false,
@@ -340,8 +442,210 @@ export class CreatorKitService {
       where: { offerId },
       update: {},
       create: { offerId },
-      include: KIT_INCLUDE,
+      include: { assets: { orderBy: { createdAt: 'asc' as const } } },
     });
+  }
+
+  private async getPreferredRevision(kit: {
+    activeRevisionId: string | null;
+    draftRevisionId: string | null;
+  }) {
+    const revisionId = kit.draftRevisionId ?? kit.activeRevisionId;
+    if (!revisionId) {
+      throw new NotFoundException('Creator Kit ещё не заполнен');
+    }
+    return this.loadRevision(revisionId);
+  }
+
+  private async ensureDraft(
+    userId: string,
+    offer: { id: string; brandId: string; description: string },
+  ) {
+    const kit = await this.ensureKit(offer.id);
+    if (kit.draftRevisionId) return this.loadRevision(kit.draftRevisionId);
+
+    const base = kit.activeRevisionId ? await this.loadRevision(kit.activeRevisionId) : null;
+    const revision = await this.prisma.$transaction(async (tx) => {
+      const revisionNumber = await this.nextRevisionNumber(tx, kit.id);
+      const created = await tx.creatorKitRevision.create({
+        data: {
+          creatorKitId: kit.id,
+          revisionNumber,
+          status: CreatorKitRevisionStatus.DRAFT,
+          basedOnRevisionId: base?.id,
+          createdByUserId: userId,
+          brandContent: base?.brandContent
+            ? { create: this.copyBrandContent(base.brandContent) }
+            : undefined,
+          productContent: base?.productContent
+            ? { create: this.copyProductContent(base.productContent) }
+            : {
+                create: {
+                  description: offer.description,
+                  benefits: [],
+                },
+              },
+        },
+      });
+      if (base) await this.cloneRevisionContent(tx, base, created.id);
+      await tx.creatorKit.update({
+        where: { id: kit.id },
+        data: { draftRevisionId: created.id },
+      });
+      return created;
+    });
+    return this.loadRevision(revision.id);
+  }
+
+  private async cloneRevisionContent(
+    tx: Prisma.TransactionClient,
+    source: Prisma.CreatorKitRevisionGetPayload<{ include: typeof REVISION_INCLUDE }>,
+    targetRevisionId: string,
+  ) {
+    if (source.scenarios.length) {
+      await tx.creatorKitScenario.createMany({
+        data: source.scenarios.map(({ id: _id, creatorKitId: _creatorKitId, revisionId: _revisionId, createdAt: _createdAt, updatedAt: _updatedAt, ...item }) => ({
+          ...item,
+          revisionId: targetRevisionId,
+        })),
+      });
+    }
+    if (source.facts.length) {
+      await tx.creatorKitFact.createMany({
+        data: source.facts.map(({ id: _id, creatorKitId: _creatorKitId, revisionId: _revisionId, createdAt: _createdAt, updatedAt: _updatedAt, ...item }) => ({
+          ...item,
+          revisionId: targetRevisionId,
+        })),
+      });
+    }
+    if (source.claims.length) {
+      await tx.creatorKitClaim.createMany({
+        data: source.claims.map(({ id: _id, creatorKitId: _creatorKitId, revisionId: _revisionId, createdAt: _createdAt, updatedAt: _updatedAt, ...item }) => ({
+          ...item,
+          revisionId: targetRevisionId,
+        })),
+      });
+    }
+    if (source.rules.length) {
+      await tx.creatorKitRule.createMany({
+        data: source.rules.map(({ id: _id, creatorKitId: _creatorKitId, revisionId: _revisionId, createdAt: _createdAt, updatedAt: _updatedAt, ...item }) => ({
+          ...item,
+          revisionId: targetRevisionId,
+        })),
+      });
+    }
+    if (source.publicationRequirements) {
+      const {
+        id: _id,
+        creatorKitId: _creatorKitId,
+        revisionId: _revisionId,
+        createdAt: _createdAt,
+        updatedAt: _updatedAt,
+        ...data
+      } = source.publicationRequirements;
+      await tx.publicationRequirements.create({
+        data: { ...data, revisionId: targetRevisionId },
+      });
+    }
+  }
+
+  private copyBrandContent(content: {
+    description: string | null;
+    history: string | null;
+    values: string[];
+    positioning: string | null;
+    accessLevel: CreatorKitAccessLevel;
+    requiresAffiliateApproval: boolean;
+  }) {
+    return {
+      description: content.description,
+      history: content.history,
+      values: content.values,
+      positioning: content.positioning,
+      accessLevel: content.accessLevel,
+      requiresAffiliateApproval: content.requiresAffiliateApproval,
+    };
+  }
+
+  private copyProductContent(content: {
+    description: string | null;
+    benefits: string[];
+    usageInstructions: string | null;
+    accessLevel: CreatorKitAccessLevel;
+    requiresAffiliateApproval: boolean;
+  }) {
+    return {
+      description: content.description,
+      benefits: content.benefits,
+      usageInstructions: content.usageInstructions,
+      accessLevel: content.accessLevel,
+      requiresAffiliateApproval: content.requiresAffiliateApproval,
+    };
+  }
+
+  private async loadRevision(id: string) {
+    const revision = await this.prisma.creatorKitRevision.findUnique({
+      where: { id },
+      include: REVISION_INCLUDE,
+    });
+    if (!revision) throw new NotFoundException('Версия Creator Kit не найдена');
+    return revision;
+  }
+
+  private async nextRevisionNumber(tx: Prisma.TransactionClient, creatorKitId: string) {
+    const aggregate = await tx.creatorKitRevision.aggregate({
+      where: { creatorKitId },
+      _max: { revisionNumber: true },
+    });
+    return (aggregate._max.revisionNumber ?? 0) + 1;
+  }
+
+  private composeKit(
+    kit: { id: string; assets: any[] },
+    revision: Prisma.CreatorKitRevisionGetPayload<{ include: typeof REVISION_INCLUDE }>,
+  ) {
+    return {
+      ...kit,
+      scenarios: revision.scenarios,
+      facts: revision.facts,
+      claims: revision.claims,
+      rules: revision.rules,
+      publicationRequirements: revision.publicationRequirements,
+      revision: {
+        id: revision.id,
+        revisionNumber: revision.revisionNumber,
+        status: revision.status,
+        basedOnRevisionId: revision.basedOnRevisionId,
+        createdAt: revision.createdAt,
+        updatedAt: revision.updatedAt,
+      },
+    };
+  }
+
+  private buildRevisionSnapshot(kit: any) {
+    const strip = (value: any) => {
+      if (!value) return null;
+      const {
+        id: _id,
+        creatorKitId: _creatorKitId,
+        revisionId: _revisionId,
+        createdAt: _createdAt,
+        updatedAt: _updatedAt,
+        ...rest
+      } = value;
+      return rest;
+    };
+    return {
+      schemaVersion: 1,
+      brandContent: null,
+      productContent: null,
+      assets: [],
+      scenarios: kit.scenarios.map(strip),
+      facts: kit.facts.map(strip),
+      claims: kit.claims.map(strip),
+      rules: kit.rules.map(strip),
+      publicationRequirements: strip(kit.publicationRequirements),
+    };
   }
 
   private async getOwnedAsset(userId: string, offerId: string, assetId: string, activeBrandId?: string) {

@@ -121,11 +121,18 @@ describe('Stage 4 affiliate finance end-to-end', () => {
     await prisma.affiliateRelationship.deleteMany();
     await prisma.offerApplication.deleteMany();
     await prisma.publicationRequirements.deleteMany();
+    await prisma.creatorKitRevisionAsset.deleteMany();
     await prisma.creatorKitAsset.deleteMany();
     await prisma.creatorKitScenario.deleteMany();
     await prisma.creatorKitFact.deleteMany();
     await prisma.creatorKitClaim.deleteMany();
     await prisma.creatorKitRule.deleteMany();
+    await prisma.creatorKitBrandContent.deleteMany();
+    await prisma.creatorKitProductContent.deleteMany();
+    await prisma.$executeRawUnsafe(
+      'UPDATE "CreatorKit" SET "activeRevisionId" = NULL, "draftRevisionId" = NULL',
+    );
+    await prisma.creatorKitRevision.deleteMany();
     await prisma.creatorKit.deleteMany();
     await prisma.offer.deleteMany();
     await prisma.creatorProfile.deleteMany();

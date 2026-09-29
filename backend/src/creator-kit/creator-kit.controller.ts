@@ -21,7 +21,7 @@ import { BrandContextGuard } from '../brand-access/brand-context.guard';
 import { ActiveBrandId } from '../brand-access/brand-context';
 import { CreatorKitService } from './creator-kit.service';
 import { InitCreatorKitUploadDto } from './dto/init-upload.dto';
-import { UpsertCreatorKitDto } from './dto/upsert-creator-kit.dto';
+import { PublishCreatorKitDto, UpsertCreatorKitDto } from './dto/upsert-creator-kit.dto';
 
 @Controller()
 @UseGuards(AccessTokenGuard, RolesGuard, BrandContextGuard)
@@ -47,6 +47,17 @@ export class CreatorKitController {
     @ActiveBrandId() brandId: string,
   ) {
     return this.creatorKit.updateBrandKit(user.id, offerId, dto, brandId);
+  }
+
+  @Post('brand/offers/:offerId/creator-kit/publish')
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
+  publish(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('offerId', ParseUUIDPipe) offerId: string,
+    @Body() dto: PublishCreatorKitDto,
+    @ActiveBrandId() brandId: string,
+  ) {
+    return this.creatorKit.publish(user.id, offerId, dto, brandId);
   }
 
   @Get('brand/offers/:offerId/creator-kit/preview')

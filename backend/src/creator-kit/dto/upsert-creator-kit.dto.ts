@@ -151,3 +151,10 @@ export class UpsertCreatorKitDto {
   @Type(() => PublicationRequirementsDto)
   publicationRequirements?: PublicationRequirementsDto;
 }
+
+export class PublishCreatorKitDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  publisherNote?: string;
+}

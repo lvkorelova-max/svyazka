@@ -710,7 +710,10 @@ export class FinanceService {
         if (payout.status === PayoutStatus.PAID) {
           throw new ConflictException('Выплаченную выплату отменить нельзя');
         }
-        if (![PayoutStatus.DRAFT, PayoutStatus.APPROVED].includes(payout.status)) {
+        if (
+          payout.status !== PayoutStatus.DRAFT &&
+          payout.status !== PayoutStatus.APPROVED
+        ) {
           throw new ConflictException('Выплату нельзя отменить в текущем статусе');
         }
         const payoutEntries = await tx.ledgerEntry.count({

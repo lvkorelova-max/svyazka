@@ -77,8 +77,23 @@ describe('Manager access and responsibility end-to-end', () => {
     await prisma.auditLog.deleteMany();
     await prisma.managerInvitation.deleteMany();
     await prisma.ledgerEntry.deleteMany();
-    await prisma.commission.deleteMany();
-    await prisma.payout.deleteMany();
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(
+        `SELECT set_config('app.allow_financial_cleanup', 'on', true)`,
+      );
+      await tx.payoutItem.deleteMany();
+      await tx.commission.deleteMany();
+      await tx.payout.deleteMany();
+    });
+    await prisma.$executeRawUnsafe(
+      'UPDATE "Order" SET "currentAttributionResultId" = NULL',
+    );
+    await prisma.orderTimelineEvent.deleteMany();
+    await prisma.attributionEvidence.deleteMany();
+    await prisma.attributionException.deleteMany();
+    await prisma.tildaPaymentProbe.deleteMany();
+    await prisma.attributionResult.deleteMany();
+    await prisma.stage8OrderEvent.deleteMany();
     await prisma.orderImportRow.deleteMany();
     await prisma.order.deleteMany();
     await prisma.orderImport.deleteMany();
@@ -86,11 +101,18 @@ describe('Manager access and responsibility end-to-end', () => {
     await prisma.affiliateRelationship.deleteMany();
     await prisma.offerApplication.deleteMany();
     await prisma.publicationRequirements.deleteMany();
+    await prisma.creatorKitRevisionAsset.deleteMany();
     await prisma.creatorKitAsset.deleteMany();
     await prisma.creatorKitScenario.deleteMany();
     await prisma.creatorKitFact.deleteMany();
     await prisma.creatorKitClaim.deleteMany();
     await prisma.creatorKitRule.deleteMany();
+    await prisma.creatorKitBrandContent.deleteMany();
+    await prisma.creatorKitProductContent.deleteMany();
+    await prisma.$executeRawUnsafe(
+      'UPDATE "CreatorKit" SET "activeRevisionId" = NULL, "draftRevisionId" = NULL',
+    );
+    await prisma.creatorKitRevision.deleteMany();
     await prisma.creatorKit.deleteMany();
     await prisma.offer.deleteMany();
     await prisma.brandManagerAssignment.deleteMany();
@@ -345,6 +367,74 @@ describe('Manager access and responsibility end-to-end', () => {
       .post(`/api/brand/team/managers/${charlieId}`)
       .set(managerHeaders(annaToken, brandBId))
       .expect(403);
+  });
+
+  it('publishes a Brand Creator Kit scenario only after the draft is published', async () => {
+    const created = await request(app.getHttpServer())
+      .post('/api/brand/offers')
+      .set(auth(brandAToken))
+      .send({
+        ...offerPayload,
+        title: 'Creator Kit revision visibility E2E',
+      })
+      .expect(201);
+    const revisionOfferId = created.body.id as string;
+
+    await request(app.getHttpServer())
+      .post(`/api/brand/offers/${revisionOfferId}/publish`)
+      .set(auth(brandAToken))
+      .expect(201);
+
+    const initialBrandKit = await request(app.getHttpServer())
+      .get(`/api/brand/offers/${revisionOfferId}/creator-kit`)
+      .set(auth(brandAToken))
+      .expect(200);
+    expect(initialBrandKit.body.revision.status).toBe('DRAFT');
+    expect(initialBrandKit.body.scenarios).toEqual([]);
+
+    const draft = await prisma.creatorKit.findUniqueOrThrow({
+      where: { offerId: revisionOfferId },
+    });
+    expect(draft.draftRevisionId).toEqual(expect.any(String));
+    expect(draft.activeRevisionId).toBeNull();
+
+    const scenario = {
+      channel: 'REELS',
+      title: 'Brand draft scenario',
+      idea: 'Сценарий доступен креатору только после публикации.',
+      accessLevel: 'DIGITAL',
+      requiresAffiliateApproval: false,
+      sortOrder: 0,
+    };
+    const savedDraft = await request(app.getHttpServer())
+      .put(`/api/brand/offers/${revisionOfferId}/creator-kit`)
+      .set(managerHeaders(annaToken, brandAId))
+      .send({ scenarios: [scenario] })
+      .expect(200);
+    expect(savedDraft.body.revision.status).toBe('DRAFT');
+    expect(savedDraft.body.scenarios).toEqual(
+      expect.arrayContaining([expect.objectContaining({ title: scenario.title })]),
+    );
+
+    await request(app.getHttpServer())
+      .get(`/api/creator/offers/${revisionOfferId}/creator-kit`)
+      .set(auth(creatorToken))
+      .expect(404);
+
+    const published = await request(app.getHttpServer())
+      .post(`/api/brand/offers/${revisionOfferId}/creator-kit/publish`)
+      .set(managerHeaders(annaToken, brandAId))
+      .send({})
+      .expect(201);
+    expect(published.body.revision.status).toBe('PUBLISHED');
+
+    const creatorKit = await request(app.getHttpServer())
+      .get(`/api/creator/offers/${revisionOfferId}/creator-kit`)
+      .set(auth(creatorToken))
+      .expect(200);
+    expect(creatorKit.body.scenarios).toEqual(
+      expect.arrayContaining([expect.objectContaining({ title: scenario.title })]),
+    );
   });
 
   it('allows BRAND to manage only its own team and preserves assignment periods', async () => {

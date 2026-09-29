@@ -62,8 +62,23 @@ describe('Manager invitation links end-to-end', () => {
     await prisma.auditLog.deleteMany();
     await prisma.managerInvitation.deleteMany();
     await prisma.ledgerEntry.deleteMany();
-    await prisma.commission.deleteMany();
-    await prisma.payout.deleteMany();
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(
+        `SELECT set_config('app.allow_financial_cleanup', 'on', true)`,
+      );
+      await tx.payoutItem.deleteMany();
+      await tx.commission.deleteMany();
+      await tx.payout.deleteMany();
+    });
+    await prisma.$executeRawUnsafe(
+      'UPDATE "Order" SET "currentAttributionResultId" = NULL',
+    );
+    await prisma.orderTimelineEvent.deleteMany();
+    await prisma.attributionEvidence.deleteMany();
+    await prisma.attributionException.deleteMany();
+    await prisma.tildaPaymentProbe.deleteMany();
+    await prisma.attributionResult.deleteMany();
+    await prisma.stage8OrderEvent.deleteMany();
     await prisma.orderImportRow.deleteMany();
     await prisma.order.deleteMany();
     await prisma.orderImport.deleteMany();
@@ -71,11 +86,18 @@ describe('Manager invitation links end-to-end', () => {
     await prisma.affiliateRelationship.deleteMany();
     await prisma.offerApplication.deleteMany();
     await prisma.publicationRequirements.deleteMany();
+    await prisma.creatorKitRevisionAsset.deleteMany();
     await prisma.creatorKitAsset.deleteMany();
     await prisma.creatorKitScenario.deleteMany();
     await prisma.creatorKitFact.deleteMany();
     await prisma.creatorKitClaim.deleteMany();
     await prisma.creatorKitRule.deleteMany();
+    await prisma.creatorKitBrandContent.deleteMany();
+    await prisma.creatorKitProductContent.deleteMany();
+    await prisma.$executeRawUnsafe(
+      'UPDATE "CreatorKit" SET "activeRevisionId" = NULL, "draftRevisionId" = NULL',
+    );
+    await prisma.creatorKitRevision.deleteMany();
     await prisma.creatorKit.deleteMany();
     await prisma.offer.deleteMany();
     await prisma.brandManagerAssignment.deleteMany();
