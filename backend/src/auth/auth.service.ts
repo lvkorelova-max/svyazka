@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import {
+  AffiliateRelationshipStatus,
   BrandVerificationStatus,
   UserRole,
   UserStatus,
@@ -401,6 +402,52 @@ export class AuthService {
           select: { id: true, email: true, status: true, createdAt: true },
         },
         _count: { select: { offers: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async listCreators() {
+    return this.prisma.creatorProfile.findMany({
+      select: {
+        id: true,
+        displayName: true,
+        description: true,
+        user: {
+          select: { status: true },
+        },
+        _count: {
+          select: {
+            applications: true,
+            affiliateRelationships: {
+              where: { status: AffiliateRelationshipStatus.ACTIVE },
+            },
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async listApplications() {
+    return this.prisma.offerApplication.findMany({
+      select: {
+        id: true,
+        status: true,
+        termsStatus: true,
+        createdAt: true,
+        creator: {
+          select: { id: true, displayName: true },
+        },
+        offer: {
+          select: {
+            id: true,
+            title: true,
+            brand: {
+              select: { id: true, brandName: true },
+            },
+          },
+        },
       },
       orderBy: { createdAt: 'desc' },
     });

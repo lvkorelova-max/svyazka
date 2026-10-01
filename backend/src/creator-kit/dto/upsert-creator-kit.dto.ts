@@ -19,8 +19,14 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import { PartialType } from '@nestjs/mapped-types';
 
 export class CreatorKitScenarioDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  id?: string;
+
   @IsEnum(CreatorKitScenarioChannel)
   channel: CreatorKitScenarioChannel;
 
@@ -28,9 +34,30 @@ export class CreatorKitScenarioDto {
   @Length(3, 200)
   title: string;
 
+  @IsOptional()
   @IsString()
-  @Length(10, 5000)
-  idea: string;
+  @Length(1, 5000)
+  mainIdea?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 5000)
+  idea?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  hook?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(10000)
+  structure?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  cta?: string;
 
   @IsEnum(CreatorKitAccessLevel)
   accessLevel: CreatorKitAccessLevel;
@@ -45,6 +72,8 @@ export class CreatorKitScenarioDto {
   sortOrder: number;
 }
 
+export class UpdateCreatorKitScenarioDto extends PartialType(CreatorKitScenarioDto) {}
+
 export class CreatorKitFactDto {
   @IsEnum(CreatorKitFactType)
   type: CreatorKitFactType;
@@ -52,6 +81,14 @@ export class CreatorKitFactDto {
   @IsString()
   @Length(1, 10000)
   value: string;
+
+  @IsOptional()
+  @IsEnum(CreatorKitAccessLevel)
+  accessLevel?: CreatorKitAccessLevel;
+
+  @IsOptional()
+  @IsBoolean()
+  requiresAffiliateApproval?: boolean;
 
   @IsInt()
   @Min(0)
@@ -67,6 +104,14 @@ export class CreatorKitClaimDto {
   @Length(1, 2000)
   value: string;
 
+  @IsOptional()
+  @IsEnum(CreatorKitAccessLevel)
+  accessLevel?: CreatorKitAccessLevel;
+
+  @IsOptional()
+  @IsBoolean()
+  requiresAffiliateApproval?: boolean;
+
   @IsInt()
   @Min(0)
   @Max(1000)
@@ -77,6 +122,14 @@ export class CreatorKitRuleDto {
   @IsString()
   @Length(1, 2000)
   value: string;
+
+  @IsOptional()
+  @IsEnum(CreatorKitAccessLevel)
+  accessLevel?: CreatorKitAccessLevel;
+
+  @IsOptional()
+  @IsBoolean()
+  requiresAffiliateApproval?: boolean;
 
   @IsInt()
   @Min(0)
@@ -115,9 +168,84 @@ export class PublicationRequirementsDto {
   @IsString({ each: true })
   @MaxLength(100, { each: true })
   allowedPlatforms: string[];
+
+  @IsOptional()
+  @IsEnum(CreatorKitAccessLevel)
+  accessLevel?: CreatorKitAccessLevel;
+
+  @IsOptional()
+  @IsBoolean()
+  requiresAffiliateApproval?: boolean;
+}
+
+export class CreatorKitBrandContentDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(10000)
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20000)
+  history?: string;
+
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  @MaxLength(500, { each: true })
+  values: string[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(10000)
+  positioning?: string;
+
+  @IsOptional()
+  @IsEnum(CreatorKitAccessLevel)
+  accessLevel?: CreatorKitAccessLevel;
+
+  @IsOptional()
+  @IsBoolean()
+  requiresAffiliateApproval?: boolean;
+}
+
+export class CreatorKitProductContentDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(20000)
+  description?: string;
+
+  @IsArray()
+  @ArrayMaxSize(30)
+  @IsString({ each: true })
+  @MaxLength(1000, { each: true })
+  benefits: string[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20000)
+  usageInstructions?: string;
+
+  @IsOptional()
+  @IsEnum(CreatorKitAccessLevel)
+  accessLevel?: CreatorKitAccessLevel;
+
+  @IsOptional()
+  @IsBoolean()
+  requiresAffiliateApproval?: boolean;
 }
 
 export class UpsertCreatorKitDto {
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CreatorKitBrandContentDto)
+  brandContent?: CreatorKitBrandContentDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CreatorKitProductContentDto)
+  productContent?: CreatorKitProductContentDto;
+
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(30)

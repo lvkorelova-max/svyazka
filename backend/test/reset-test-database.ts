@@ -39,6 +39,8 @@ export async function resetTestDatabase(prisma: PrismaService) {
     await tx.ledgerEntry.deleteMany();
     await tx.ledgerPosting.deleteMany();
     await tx.ledgerTransaction.deleteMany();
+    await tx.ledgerAccount.deleteMany();
+    await tx.reconciliationRun.deleteMany();
     await tx.payoutItem.deleteMany();
     await tx.financialDispute.deleteMany();
     await tx.brandStatementLine.deleteMany();
@@ -65,6 +67,7 @@ export async function resetTestDatabase(prisma: PrismaService) {
     await tx.orderImport.deleteMany();
     await tx.creatorPromoCode.deleteMany();
     await tx.creatorLink.deleteMany();
+    await tx.creatorProductAccessGrant.deleteMany();
     await tx.affiliateCommercialAgreement.deleteMany();
     await tx.affiliateRelationship.deleteMany();
     await tx.offerApplicationTermsAcceptance.deleteMany();
@@ -84,6 +87,9 @@ export async function resetTestDatabase(prisma: PrismaService) {
     );
     await tx.creatorKitRevision.deleteMany();
     await tx.creatorKit.deleteMany();
+    await tx.offer.updateMany({
+      data: { imageId: null },
+    });
     await tx.offerImage.deleteMany();
     await tx.$executeRawUnsafe(
       'UPDATE "Offer" SET "currentOfferVersionId" = NULL, "currentCommercialTermsId" = NULL',
@@ -95,7 +101,6 @@ export async function resetTestDatabase(prisma: PrismaService) {
     await tx.attributionRuleSet.deleteMany();
     await tx.integrationCredentialVersion.deleteMany();
     await tx.trackerInstallation.deleteMany();
-    await tx.creatorProductAccessGrant.deleteMany();
     await tx.brandManagerAssignment.deleteMany();
     await tx.managerProfile.deleteMany();
     await tx.creatorProfile.deleteMany();

@@ -43,6 +43,16 @@ export class AdminSecurityController {
     return this.auth.listBrands();
   }
 
+  @Get('creators')
+  listCreators() {
+    return this.auth.listCreators();
+  }
+
+  @Get('applications')
+  listApplications() {
+    return this.auth.listApplications();
+  }
+
   @Post('brands/:id/verify')
   @RateLimit({ scope: 'admin-brand-verify', limit: 60, windowSeconds: 3600 })
   verifyBrand(

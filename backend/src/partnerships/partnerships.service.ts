@@ -19,6 +19,7 @@ import {
 } from '@prisma/client';
 import { createHash, createHmac, randomBytes, randomInt, randomUUID } from 'crypto';
 import { AuditService } from '../audit/audit.service';
+import { CommercialTermsService } from '../commercial-terms/commercial-terms.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { BrandAccessService } from '../brand-access/brand-access.service';
 import { CreateApplicationDto } from './dto/create-application.dto';
@@ -160,53 +161,97 @@ export class PartnershipsService {
     }
 
     try {
-      return await this.prisma.offerApplication.create({
-        data: {
-          offerId,
-          creatorId: creator.id,
-          message: dto.message?.trim() || null,
-          ...(offer.currentCommercialTerms
-            ? {
-                termsStatus: ApplicationTermsStatus.CURRENT_ACCEPTED,
-                applicableCommercialTermsId: offer.currentCommercialTerms.id,
-                latestAcceptedTermsId: offer.currentCommercialTerms.id,
-                termsObservation: {
-                  create: {
-                    offerId,
-                    observedOfferVersionId: offer.currentVersion?.id ?? null,
-                    commercialTermsVersionId: offer.currentCommercialTerms.id,
-                    calculationPolicy: offer.currentCommercialTerms.calculationPolicy,
-                    totalCommissionPoolBps: offer.currentCommercialTerms.totalCommissionPoolBps,
-                    creatorPoolShareBps: offer.currentCommercialTerms.creatorPoolShareBps,
-                    platformPoolShareBps: offer.currentCommercialTerms.platformPoolShareBps,
-                    displayedCreatorEffectiveBps: offer.currentCommercialTerms.creatorEffectiveGmvBps,
-                    displayedPlatformEffectiveBps: offer.currentCommercialTerms.platformEffectiveGmvBps,
-                    currency: offer.currentCommercialTerms.currency,
-                    attributionPolicySnapshot: offer.currentCommercialTerms.attributionPolicySnapshot as Prisma.InputJsonValue,
-                    confirmationPolicySnapshot: offer.currentCommercialTerms.confirmationPolicySnapshot as Prisma.InputJsonValue,
-                    returnPolicySnapshot: offer.currentCommercialTerms.returnPolicySnapshot as Prisma.InputJsonValue,
-                    payoutPolicySnapshot: offer.currentCommercialTerms.payoutPolicySnapshot as Prisma.InputJsonValue,
-                    observedAt: new Date(),
-                    submittedAt: new Date(),
-                    requestId: this.audit.requestId(),
-                  },
+      return await this.prisma.$transaction(
+        async (tx) => {
+          const current = await tx.offer.findFirst({
+            where: { id: offerId, status: OfferStatus.PUBLISHED },
+            include: { currentCommercialTerms: true, currentVersion: true },
+          });
+          if (!current?.currentCommercialTerms) {
+            throw new ConflictException('Коммерческие условия оффера недоступны');
+          }
+          if (
+            dto.expectedCommercialTermsVersion !== undefined &&
+            dto.expectedCommercialTermsVersion !== current.currentCommercialTerms.version
+          ) {
+            throw new ConflictException({
+              code: 'OFFER_TERMS_VERSION_CHANGED',
+              message: 'Коммерческие условия оффера изменились. Обновите страницу.',
+              currentCommercialTermsVersion: current.currentCommercialTerms.version,
+            });
+          }
+          const submittedAt = new Date();
+          const requestId = this.audit.requestId();
+          const application = await tx.offerApplication.create({
+            data: {
+              offerId,
+              creatorId: creator.id,
+              message: dto.message?.trim() || null,
+              termsStatus: ApplicationTermsStatus.CURRENT_ACCEPTED,
+              applicableCommercialTermsId: current.currentCommercialTerms.id,
+              latestAcceptedTermsId: current.currentCommercialTerms.id,
+              termsObservation: {
+                create: {
+                  offerId,
+                  observedOfferVersionId: current.currentVersion?.id ?? null,
+                  commercialTermsVersionId: current.currentCommercialTerms.id,
+                  calculationPolicy: current.currentCommercialTerms.calculationPolicy,
+                  totalCommissionPoolBps: current.currentCommercialTerms.totalCommissionPoolBps,
+                  creatorPoolShareBps: current.currentCommercialTerms.creatorPoolShareBps,
+                  platformPoolShareBps: current.currentCommercialTerms.platformPoolShareBps,
+                  displayedCreatorEffectiveBps: current.currentCommercialTerms.creatorEffectiveGmvBps,
+                  displayedPlatformEffectiveBps: current.currentCommercialTerms.platformEffectiveGmvBps,
+                  currency: current.currentCommercialTerms.currency,
+                  attributionPolicySnapshot:
+                    current.currentCommercialTerms.attributionPolicySnapshot as Prisma.InputJsonValue,
+                  confirmationPolicySnapshot:
+                    current.currentCommercialTerms.confirmationPolicySnapshot as Prisma.InputJsonValue,
+                  returnPolicySnapshot:
+                    current.currentCommercialTerms.returnPolicySnapshot as Prisma.InputJsonValue,
+                  payoutPolicySnapshot:
+                    current.currentCommercialTerms.payoutPolicySnapshot as Prisma.InputJsonValue,
+                  observedAt: submittedAt,
+                  submittedAt,
+                  requestId,
                 },
-                termsAcceptances: {
-                  create: {
-                    commercialTermsVersionId: offer.currentCommercialTerms.id,
-                    acceptanceType: TermsAcceptanceType.INITIAL_SUBMISSION,
-                    displayedCreatorEffectiveBps: offer.currentCommercialTerms.creatorEffectiveGmvBps,
-                    acceptedAt: new Date(),
-                    actorUserId: userId,
-                    requestId: this.audit.requestId(),
-                    source: 'APPLICATION_SUBMISSION',
-                  },
+              },
+              termsAcceptances: {
+                create: {
+                  commercialTermsVersionId: current.currentCommercialTerms.id,
+                  acceptanceType: TermsAcceptanceType.INITIAL_SUBMISSION,
+                  displayedCreatorEffectiveBps:
+                    current.currentCommercialTerms.creatorEffectiveGmvBps,
+                  acceptedAt: submittedAt,
+                  actorUserId: userId,
+                  requestId,
+                  source: 'APPLICATION_SUBMISSION',
                 },
-              }
-            : {}),
+              },
+            },
+          });
+          await tx.auditLog.create({
+            data: {
+              actorUserId: userId,
+              action: 'OFFER_APPLICATION_SUBMITTED',
+              entityType: 'OfferApplication',
+              entityId: application.id,
+              requestId,
+              metadata: {
+                offerId,
+                offerVersion: current.currentVersion?.version ?? null,
+                commercialTermsVersion: current.currentCommercialTerms.version,
+                displayedCreatorEffectiveBps:
+                  current.currentCommercialTerms.creatorEffectiveGmvBps,
+              },
+            },
+          });
+          return tx.offerApplication.findUniqueOrThrow({
+            where: { id: application.id },
+            include: APPLICATION_INCLUDE,
+          });
         },
-        include: APPLICATION_INCLUDE,
-      });
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
     } catch (error) {
       if (this.isUniqueConflict(error)) {
         throw new ConflictException('Активная заявка на этот оффер уже существует');
@@ -671,7 +716,7 @@ export class PartnershipsService {
           },
           { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
         );
-        return this.presentRelationship(result);
+        return this.presentRelationship(result, 'brand');
       } catch (error) {
         if (this.isRetryableApproval(error)) continue;
         throw error;
@@ -686,14 +731,39 @@ export class PartnershipsService {
     if (application.status !== OfferApplicationStatus.PENDING) {
       throw new ConflictException('Заявку нельзя отклонить в текущем статусе');
     }
-    return this.prisma.offerApplication.update({
-      where: { id: application.id },
-      data: {
-        status: OfferApplicationStatus.REJECTED,
-        reviewedAt: new Date(),
-        reviewedByUserId: userId,
-      },
-      include: APPLICATION_INCLUDE,
+    return this.prisma.$transaction(async (tx) => {
+      const rejectedAt = new Date();
+      const updated = await tx.offerApplication.update({
+        where: { id: application.id },
+        data: {
+          status: OfferApplicationStatus.REJECTED,
+          requiredCreatorAction: null,
+          creatorActionResolvedAt: rejectedAt,
+          reviewedAt: rejectedAt,
+          reviewedByUserId: userId,
+          version: { increment: 1 },
+        },
+        include: APPLICATION_INCLUDE,
+      });
+      await tx.userNotification.updateMany({
+        where: {
+          applicationId: application.id,
+          actionRequired: true,
+          resolvedAt: null,
+        },
+        data: { actionRequired: false, resolvedAt: rejectedAt },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorUserId: userId,
+          action: 'OFFER_APPLICATION_REJECTED',
+          entityType: 'OfferApplication',
+          entityId: application.id,
+          requestId: this.audit.requestId(),
+          metadata: { offerId: application.offerId },
+        },
+      });
+      return updated;
     });
   }
 
@@ -730,7 +800,9 @@ export class PartnershipsService {
       include: RELATIONSHIP_INCLUDE,
       orderBy: { createdAt: 'desc' },
     });
-    return relationships.map((relationship) => this.presentRelationship(relationship));
+    return relationships.map((relationship) =>
+      this.presentRelationship(relationship, 'brand'),
+    );
   }
 
   async transitionRelationship(
@@ -748,7 +820,9 @@ export class PartnershipsService {
     if (relationship.offer.brandId !== brand.id) {
       throw new ForbiddenException('Нет доступа к этой партнёрской связи');
     }
-    if (relationship.status === target) return this.presentRelationship(relationship);
+    if (relationship.status === target) {
+      return this.presentRelationship(relationship, 'brand');
+    }
     if (!RELATIONSHIP_TRANSITIONS[relationship.status].includes(target)) {
       throw new ConflictException(
         `Переход ${relationship.status} → ${target} недоступен`,
@@ -795,7 +869,7 @@ export class PartnershipsService {
         metadata: { offerId: relationship.offerId, creatorId: relationship.creatorId },
       });
     }
-    return this.presentRelationship(updated);
+    return this.presentRelationship(updated, 'brand');
   }
 
   async updateResponsibility(

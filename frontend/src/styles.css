@@ -1012,6 +1012,16 @@ p {
   font-weight: 700;
 }
 
+.form-hint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.form-hint.error {
+  color: var(--danger);
+}
+
 .form-actions {
   display: flex;
   justify-content: space-between;
@@ -1473,12 +1483,24 @@ p {
 .upload-box {
   display: grid;
   min-height: 120px;
+  gap: 12px;
   place-items: center;
+  padding: 20px;
   border: 1px dashed var(--line-strong);
   border-radius: 6px;
   color: var(--muted);
   font-size: 13px;
   text-align: center;
+}
+
+.upload-box strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.compact-upload-box {
+  min-height: 0;
+  margin-top: 12px;
 }
 
 .empty-state {
@@ -1705,6 +1727,17 @@ p {
   color: var(--accent);
   font-size: 9px;
   font-weight: 800;
+}
+
+.asset-preview.has-image {
+  overflow: hidden;
+  background: var(--canvas);
+}
+
+.asset-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .asset-main {
@@ -2112,6 +2145,24 @@ p {
   padding: 0 20px 20px;
 }
 
+.creator-kit-upload-target {
+  scroll-margin-top: 84px;
+  border-color: #b9d2c4;
+}
+
+.creator-kit-upload-arrival {
+  display: flex;
+  margin: 0 20px;
+  padding: 12px 14px;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid #b9d2c4;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+  font-size: 12px;
+}
+
 .checkbox-grid.compact {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
@@ -2127,6 +2178,20 @@ p {
 
 .brand-kit-toolbar .form-group {
   width: min(100%, 470px);
+}
+
+.brand-kit-toolbar.preview-controls {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.brand-kit-toolbar.preview-controls .form-group {
+  width: 100%;
+}
+
+.brand-kit-manager .requirement-row {
+  grid-template-columns: 140px minmax(0, 1fr) auto;
+  align-items: center;
 }
 
 .kit-analytics-grid {
@@ -3069,6 +3134,16 @@ p {
   .preview-notice {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .brand-kit-toolbar.preview-controls {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .brand-kit-manager .requirement-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
   }
 
   .access-badge {

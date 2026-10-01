@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+deny() {
+  printf 'Deployment key permits only svyazka-deployctl commands.\n' >&2
+  exit 126
+}
+
+original="${SSH_ORIGINAL_COMMAND:-}"
+[[ -n "$original" ]] || deny
+
+read -r -a argv <<< "$original"
+[[ "${#argv[@]}" -ge 1 ]] || deny
+[[ "${argv[0]}" == "svyazka-deployctl" ]] || deny
+
+for argument in "${argv[@]}"; do
+  [[ "$argument" != *$'\n'* ]] || deny
+  [[ "$argument" != *$'\r'* ]] || deny
+done
+
+exec /usr/bin/sudo -n /usr/local/sbin/svyazka-deployctl "${argv[@]:1}"

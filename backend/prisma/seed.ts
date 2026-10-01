@@ -15,6 +15,7 @@ import {
   OrderImportRowStatus,
   OrderImportStatus,
   OrderStatus,
+  Prisma,
   PrismaClient,
   PromotionWithoutProduct,
   UserRole,
@@ -310,6 +311,53 @@ async function main() {
         requiresAffiliateApproval: false,
       },
     });
+  });
+
+  const revisionContent = await prisma.creatorKitRevision.findUniqueOrThrow({
+    where: { id: revision.id },
+    include: {
+      brandContent: true,
+      productContent: true,
+      scenarios: { orderBy: { sortOrder: 'asc' } },
+      facts: { orderBy: { sortOrder: 'asc' } },
+      claims: { orderBy: { sortOrder: 'asc' } },
+      rules: { orderBy: { sortOrder: 'asc' } },
+      publicationRequirements: true,
+    },
+  });
+  const strip = (value: Record<string, unknown> | null) => {
+    if (!value) return null;
+    const {
+      revisionId: _revisionId,
+      createdAt: _createdAt,
+      updatedAt: _updatedAt,
+      ...rest
+    } = value;
+    return rest;
+  };
+  const snapshot = {
+    schemaVersion: 1,
+    customSections: [],
+    brandContent: strip(revisionContent.brandContent),
+    productContent: strip(revisionContent.productContent),
+    assets: [],
+    scenarios: revisionContent.scenarios.map((item) => strip(item)),
+    facts: revisionContent.facts.map((item) => strip(item)),
+    claims: revisionContent.claims.map((item) => strip(item)),
+    rules: revisionContent.rules.map((item) => strip(item)),
+    publicationRequirements: strip(revisionContent.publicationRequirements),
+  };
+  await prisma.creatorKitRevision.update({
+    where: { id: revision.id },
+    data: {
+      snapshot: snapshot as Prisma.InputJsonValue,
+      completenessPercent: 85,
+      completenessDetails: {
+        percent: 85,
+        readyToPublish: false,
+        missingSections: ['Материалы'],
+      },
+    },
   });
 
   const application = await prisma.offerApplication.upsert({

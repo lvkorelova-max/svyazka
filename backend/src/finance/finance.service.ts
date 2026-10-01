@@ -641,7 +641,16 @@ export class FinanceService {
 
   async listCreatorCommissions(userId: string, query: ListFinanceQueryDto) {
     const creator = await this.getCreator(userId);
-    return this.paginateCommissions({ creatorId: creator.id }, query);
+    const result = await this.paginateCommissions(
+      { creatorId: creator.id },
+      query,
+    );
+    return {
+      ...result,
+      items: result.items.map((commission) =>
+        this.presentCreatorCommission(commission),
+      ),
+    };
   }
 
   async getCreatorEarningsSummary(userId: string) {
@@ -676,6 +685,113 @@ export class FinanceService {
         (sum, commission) => sum + BigInt(commission.debtAmountKopecks),
         0n,
       ),
+    };
+  }
+
+  async listCreatorPayouts(userId: string, query: ListFinanceQueryDto) {
+    const creator = await this.getCreator(userId);
+    const result = await this.paginate(
+      'payout',
+      { creatorId: creator.id },
+      query,
+      { createdAt: query.sortDirection ?? 'desc' },
+    );
+    return {
+      ...result,
+      items: result.items.map((payout: any) => ({
+        id: payout.id,
+        amountMinor: payout.amountKopecks,
+        currency: payout.currency,
+        status: payout.status,
+        reference: payout.reference,
+        createdAt: payout.createdAt,
+        approvedAt: payout.approvedAt,
+        paidAt: payout.paidAt,
+        cancelledAt: payout.cancelledAt,
+        items: (payout.commissions ?? []).map((commission: any) =>
+          this.presentCreatorCommission(commission),
+        ),
+      })),
+    };
+  }
+
+  async listBrandStatements(userId: string) {
+    const brand = await this.getBrand(userId);
+    return this.prisma.brandStatement.findMany({
+      where: { brandId: brand.id },
+      include: { lines: true, payments: { include: { payment: true } } },
+      orderBy: [{ periodStart: 'desc' }, { createdAt: 'desc' }],
+    });
+  }
+
+  async listAdminStatements() {
+    return this.prisma.brandStatement.findMany({
+      include: {
+        brand: { select: { id: true, brandName: true } },
+        lines: true,
+        payments: { include: { payment: true } },
+      },
+      orderBy: [{ periodStart: 'desc' }, { createdAt: 'desc' }],
+    });
+  }
+
+  async listAdminDisputes() {
+    return this.prisma.financialDispute.findMany({
+      include: {
+        brand: { select: { id: true, brandName: true } },
+        order: true,
+        commission: true,
+        statement: true,
+      },
+      orderBy: { openedAt: 'desc' },
+    });
+  }
+
+  async getAdminFinanceOverview() {
+    const [brandCount, creatorCount, orders, commissions, statements, payouts] =
+      await Promise.all([
+        this.prisma.brandProfile.count(),
+        this.prisma.creatorProfile.count(),
+        this.prisma.order.findMany(),
+        this.prisma.commission.findMany(),
+        this.prisma.brandStatement.findMany(),
+        this.prisma.payout.findMany(),
+      ]);
+    return {
+      brandCount,
+      creatorCount,
+      attributedGmvMinor: orders
+        .filter((order) => order.affiliateRelationshipId)
+        .reduce((sum, order) => sum + BigInt(order.amountKopecks), 0n),
+      creatorCommissionsMinor: commissions.reduce(
+        (sum, commission) =>
+          sum +
+          (commission.creatorAmountMinor ??
+            BigInt(commission.creatorAmountKopecks)),
+        0n,
+      ),
+      platformRevenueMinor: commissions.reduce(
+        (sum, commission) =>
+          sum +
+          (commission.platformAmountMinor ??
+            BigInt(commission.platformAmountKopecks)),
+        0n,
+      ),
+      brandObligationsMinor: statements.reduce(
+        (sum, statement) => sum + statement.totalDueMinor,
+        0n,
+      ),
+      unpaidObligationsMinor: statements.reduce(
+        (sum, statement) =>
+          sum + statement.totalDueMinor - statement.paidMinor,
+        0n,
+      ),
+      paidPayoutsMinor: payouts
+        .filter((payout) => payout.status === PayoutStatus.PAID)
+        .reduce((sum, payout) => sum + payout.amountKopecks, 0n),
+      openDisputes: await this.prisma.financialDispute.count({
+        where: { status: FinancialDisputeStatus.OPEN },
+      }),
     };
   }
 
@@ -1090,7 +1206,9 @@ export class FinanceService {
         await tx.commission.updateMany({
           where: {
             payoutId: payout.id,
-            status: CommissionStatus.AVAILABLE,
+            status: {
+              in: [CommissionStatus.AVAILABLE, CommissionStatus.PAYABLE],
+            },
           },
           data: { payoutId: null },
         });
@@ -1915,7 +2033,6 @@ export class FinanceService {
       const offerId = selected?.relationship.offerId ?? requestedOfferId;
       const offer = offerId ? offerMap.get(offerId) : undefined;
       if (!offer) errors.push('Невозможно определить оффер');
-
       const existing = externalOrderId ? existingMap.get(externalOrderId) : undefined;
       if (
         selected &&

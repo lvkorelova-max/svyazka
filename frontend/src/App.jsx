@@ -94,17 +94,38 @@ function mapCreatorKit(kit, offer) {
   const facts = Object.fromEntries((kit?.facts || []).map((fact) => [factTypeLabels[fact.type] || fact.type, fact.value]));
   const scenarios = (kit?.scenarios || []).map((scenario) => ({
     ...scenario,
+    channelValue: scenario.channel,
     channel: scenarioChannelLabels[scenario.channel] || scenario.channel,
-    idea: scenario.idea
+    idea: scenario.mainIdea || scenario.idea || ""
   }));
   const productScenarios = scenarios.filter((scenario) => scenario.accessLevel === "PRODUCT");
 
   return {
+    loaded: Boolean(kit),
     promotionWithoutSample: policy === "YES" ? "yes" : policy === "NO" ? "no" : "restricted",
     allowedDigitalFormats: kit?.offerPolicy?.allowedPromotionFormats || offer?.allowedPromotionFormats || [],
     productAccessFormats: productScenarios.map((scenario) => scenario.title),
     completeness: kit?.completeness?.percent || 0,
-    completenessMissing: kit?.completeness?.missing || [],
+    completenessMissing: kit?.completeness?.missingSections || [],
+    completenessSections: kit?.completeness?.sections || [],
+    readyToPublish: Boolean(kit?.completeness?.readyToPublish),
+    revision: kit?.revision || kit?.accessContext?.revision || null,
+    accessContext: kit?.accessContext || {},
+    brandContent: {
+      description: kit?.brandContent?.description || "",
+      history: kit?.brandContent?.history || "",
+      values: kit?.brandContent?.values || [],
+      positioning: kit?.brandContent?.positioning || "",
+      accessLevel: kit?.brandContent?.accessLevel || "DIGITAL",
+      requiresAffiliateApproval: Boolean(kit?.brandContent?.requiresAffiliateApproval)
+    },
+    productContent: {
+      description: kit?.productContent?.description || "",
+      benefits: kit?.productContent?.benefits || [],
+      usageInstructions: kit?.productContent?.usageInstructions || "",
+      accessLevel: kit?.productContent?.accessLevel || "DIGITAL",
+      requiresAffiliateApproval: Boolean(kit?.productContent?.requiresAffiliateApproval)
+    },
     assets: (kit?.assets || []).map((asset) => ({
       id: asset.id,
       name: asset.title,
@@ -120,13 +141,18 @@ function mapCreatorKit(kit, offer) {
       expires: asset.expiresAt ? new Date(asset.expiresAt).toLocaleDateString("ru-RU") : "Без срока",
       active: asset.status === "READY",
       status: asset.status,
-      originalFileName: asset.originalFileName
+      originalFileName: asset.originalFileName,
+      previewUrl: asset.previewUrl || ""
     })),
     scenarios,
     facts,
+    factsRaw: kit?.facts || [],
     allowedClaims: (kit?.claims || []).filter((claim) => claim.type === "ALLOWED").map((claim) => claim.value),
     forbiddenClaims: (kit?.claims || []).filter((claim) => claim.type === "FORBIDDEN").map((claim) => claim.value),
     noSampleRules: (kit?.rules || []).map((rule) => rule.value),
+    claimsRaw: kit?.claims || [],
+    rulesRaw: kit?.rules || [],
+    publicationRaw: publication || null,
     publicationRequirements: publication ? {
       "Обязательные упоминания": publication.mandatoryMentions.join(", ") || "Не заданы",
       "Маркировка рекламы": publication.advertisingLabel || "Не задана",
@@ -464,7 +490,7 @@ function OfferCard({ offer, onOpen }) {
         </div>
         <div className="offer-terms">
           <div>
-            <span className="term-label">Комиссия</span>
+            <span className="term-label">Вы заработаете</span>
             <span className="term-value">{offer.commission}% · {money(reward)}</span>
           </div>
           <div>
@@ -594,15 +620,12 @@ function HomePage({ offers, navigate, openOffer }) {
 function CatalogPage({ offers, openOffer, navigate, role }) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("Все категории");
-  const [commission, setCommission] = useState("Любая комиссия");
+  const [commission, setCommission] = useState(COMMISSION_FILTERS.ANY);
   const categories = ["Все категории", ...new Set(offers.map((offer) => offer.category))];
   const filtered = offers.filter((offer) => {
     const matchesQuery = `${offer.title} ${offer.brand}`.toLowerCase().includes(query.toLowerCase());
     const matchesCategory = category === "Все категории" || offer.category === category;
-    const matchesCommission =
-      commission === "Любая комиссия" ||
-      (commission === "От 15%" && offer.commission >= 15) ||
-      (commission === "До 14%" && offer.commission <= 14);
+    const matchesCommission = matchesCommissionFilter(offer.commission, commission);
     return matchesQuery && matchesCategory && matchesCommission && offer.status === "active";
   });
 
@@ -625,9 +648,7 @@ function CatalogPage({ offers, openOffer, navigate, role }) {
             {categories.map((item) => <option key={item}>{item}</option>)}
           </select>
           <select className="select-field" value={commission} onChange={(event) => setCommission(event.target.value)}>
-            <option>Любая комиссия</option>
-            <option>От 15%</option>
-            <option>До 14%</option>
+            {Object.values(COMMISSION_FILTERS).map((label) => <option key={label}>{label}</option>)}
           </select>
         </div>
         <div className="catalog-count">Найдено офферов: {filtered.length}</div>
@@ -712,7 +733,7 @@ function CreatorKitContent({ offer, mode = "creator", hasProductAccess = false, 
           </span>
           <span className={`access-badge product ${hasProductAccess ? "unlocked" : "locked"}`}>
             <b>{hasProductAccess ? "Product Access" : "Product Access · закрыт"}</b>
-            <small>{hasProductAccess ? "Образец подтверждён" : `После получения образца`}</small>
+            <small>{hasProductAccess ? "Ручной доступ для пилота" : "Выдаётся брендом вручную"}</small>
           </span>
         </div>
       </div>
@@ -765,10 +786,10 @@ function CreatorKitContent({ offer, mode = "creator", hasProductAccess = false, 
                 {mode === "creator" ? (
                   <label className="asset-select">
                     <input type="checkbox" checked={selectedAssets.includes(asset.id)} disabled={!asset.active} onChange={() => toggleSelected(asset.id)} />
-                    <span className="asset-preview">{asset.type.slice(0, 2).toUpperCase()}</span>
+                    <AssetPreview asset={asset} />
                   </label>
                 ) : (
-                  <span className="asset-preview">{asset.type.slice(0, 2).toUpperCase()}</span>
+                  <AssetPreview asset={asset} />
                 )}
                 <div className="asset-main">
                   <strong>{asset.name}</strong>
@@ -821,7 +842,7 @@ function CreatorKitContent({ offer, mode = "creator", hasProductAccess = false, 
               <span className="access-lock">{hasProductAccess ? "✓" : "×"}</span>
               <div>
                 <h3>Product Access</h3>
-                <p>{hasProductAccess ? "Получение образца подтверждено. Можно создавать форматы с реальным использованием продукта." : "Откроется после подтверждённого получения физического образца."}</p>
+                <p>{hasProductAccess ? "Бренд вручную открыл Product Access для закрытого пилота. Это не подтверждает отправку или получение образца." : "Product Access выдаётся брендом вручную и не означает отправку физического образца."}</p>
               </div>
             </div>
             <div className="format-chips">
@@ -833,6 +854,21 @@ function CreatorKitContent({ offer, mode = "creator", hasProductAccess = false, 
 
       {kitTab === "facts" && (
         <div className="kit-content">
+          <div className="rules-requirements">
+            <div>
+              <h3>О бренде</h3>
+              {kit.brandContent.description ? <p>{kit.brandContent.description}</p> : <p>Раздел пока не заполнен.</p>}
+              {kit.brandContent.history && <p>{kit.brandContent.history}</p>}
+              {kit.brandContent.positioning && <p><strong>Позиционирование:</strong> {kit.brandContent.positioning}</p>}
+              {!!kit.brandContent.values.length && <p><strong>Ценности:</strong> {kit.brandContent.values.join(", ")}</p>}
+            </div>
+            <div>
+              <h3>О продукте</h3>
+              {kit.productContent.description ? <p>{kit.productContent.description}</p> : <p>Раздел пока не заполнен.</p>}
+              {!!kit.productContent.benefits.length && <p><strong>Преимущества:</strong> {kit.productContent.benefits.join(", ")}</p>}
+              {kit.productContent.usageInstructions && <p><strong>Применение:</strong> {kit.productContent.usageInstructions}</p>}
+            </div>
+          </div>
           <div className="kit-section-heading"><div><h3>Банк фактов о продукте</h3><p>Формулировки основаны на данных бренда и могут использоваться без заявления о личном опыте.</p></div></div>
           <div className="facts-grid">
             {Object.entries(kit.facts).map(([label, value]) => (
@@ -968,7 +1004,7 @@ function OfferPage({ offer, applicationStatus, role, apply, navigate, notify, on
             <h1>{offer.title}</h1>
             <div className="price-line">
               <span className="price">{money(offer.price)}</span>
-              <span className="commission">Комиссия {offer.commission}% · {money(reward)}</span>
+              <span className="commission">Вы заработаете {offer.commission}% · {money(reward)} с подтверждённой продажи</span>
             </div>
             <p className="description">{offer.description}</p>
             <div className="eligibility-box">
@@ -1211,8 +1247,18 @@ const applicationStatusLabels = {
   PENDING: "На рассмотрении",
   APPROVED: "Одобрена",
   REJECTED: "Отклонена",
-  CANCELLED: "Отменена"
+  CANCELLED: "Отменена",
+  WITHDRAWN: "Отозвана"
 };
+
+function applicationUiState(application) {
+  return getApplicationUiState(application);
+}
+
+function formatRateBps(bps) {
+  const value = Number(bps || 0) / 100;
+  return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}%`;
+}
 
 const relationshipStatusLabels = {
   ACTIVE: "Активна",
@@ -1220,17 +1266,18 @@ const relationshipStatusLabels = {
   REVOKED: "Отозвана"
 };
 
-function CreatorDashboard({ user, applications, relationships, offers, finance, cancelApplication, copyValue, navigate }) {
+function CreatorDashboard({ user, applications, relationships, offers, finance, notifications, acceptTerms, withdrawApplication, copyValue, navigate }) {
   const [tab, setTab] = useState("offers");
   const activeRelationships = relationships.filter((item) => item.status === "ACTIVE");
   const displayName = user?.profile?.displayName || user?.name || "креатор";
+  const actionRequired = applications.filter((item) => applicationUiState(item) === "TERMS_CHANGED");
 
   return (
     <DashboardLayout
       roleLabel="Кабинет креатора"
       items={[
         { id: "offers", label: "Мои офферы" },
-        { id: "applications", label: "Заявки" },
+        { id: "applications", label: actionRequired.length ? `Заявки (${actionRequired.length})` : "Заявки" },
         { id: "links", label: "Партнёрские ссылки" },
         { id: "rewards", label: "Вознаграждения" }
       ]}
@@ -1246,8 +1293,26 @@ function CreatorDashboard({ user, applications, relationships, offers, finance, 
       </div>
       <div className="creator-warning compact-warning">
         <span className="warning-mark">i</span>
-        <strong>Заявки, партнёрские ссылки, клики, продажи и комиссии загружаются с сервера.</strong>
+        <strong>Заявки, партнёрские ссылки, клики, продажи и комиссии загружаются с сервера. Непрочитанных уведомлений: {notifications.counts?.unread || 0}.</strong>
       </div>
+      {!!actionRequired.length && (
+        <div className="panel">
+          <div className="panel-header"><h2>Требуется действие</h2><Status type="danger">{actionRequired.length}</Status></div>
+          <div className="panel-body">
+            {actionRequired.map((application) => (
+              <div className="tool-card" key={application.id}>
+                <span><strong>Условия оффера изменились</strong> · {application.offer.title}</span>
+                <span>Предыдущая ставка: {formatRateBps(application.latestAcceptedTerms?.creatorEffectiveGmvBps || application.termsObservation?.displayedCreatorEffectiveBps)}</span>
+                <span>Новая ставка: {formatRateBps(application.applicableCommercialTerms?.creatorEffectiveGmvBps)}</span>
+                <div className="row-actions">
+                  <button className="button" onClick={() => acceptTerms(application)}>Принять новые условия</button>
+                  <button className="button ghost" onClick={() => withdrawApplication(application.id)}>Отозвать заявку</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="stats-grid">
         <div className="stat-card"><span className="stat-label">Активные связи</span><span className="stat-value">{activeRelationships.length}</span><span className="stat-note">с рабочей ссылкой</span></div>
         <div className="stat-card"><span className="stat-label">На рассмотрении</span><span className="stat-value">{applications.filter((item) => item.status === "PENDING").length}</span><span className="stat-note">заявок</span></div>
@@ -1267,7 +1332,7 @@ function CreatorDashboard({ user, applications, relationships, offers, finance, 
                   <div className="creator-offer-image"><img src={offer.image} alt="" /></div>
                   <div>
                     <h3>{offer.title}</h3>
-                    <p>{offer.brand} · комиссия {offer.commission}%</p>
+                    <p>{offer.brand} · ваша ставка {formatRateBps(relationship.commercialAgreement?.creatorEffectiveGmvBps || offer.creatorEffectiveBps)}</p>
                   </div>
                   <div><Status type={relationship.status === "ACTIVE" ? "success" : relationship.status === "REVOKED" ? "danger" : "pending"}>{relationshipStatusLabels[relationship.status]}</Status></div>
                   <div className="creator-offer-actions">
@@ -1288,15 +1353,16 @@ function CreatorDashboard({ user, applications, relationships, offers, finance, 
             <table className="data-table">
               <thead><tr><th>Оффер</th><th>Бренд</th><th>Дата</th><th>Статус</th><th></th></tr></thead>
               <tbody>
-                {applications.map((application) => (
-                  <tr key={application.id}>
+                {applications.map((application) => {
+                  const uiState = applicationUiState(application);
+                  return <tr key={application.id}>
                     <td><span className="table-title">{application.offer.title}</span>{application.message && <span className="table-subtitle">{application.message}</span>}</td>
                     <td>{application.offer.brand.brandName}</td>
                     <td>{new Date(application.createdAt).toLocaleDateString("ru-RU")}</td>
-                    <td><Status type={application.status === "APPROVED" ? "success" : application.status === "REJECTED" ? "danger" : "pending"}>{applicationStatusLabels[application.status]}</Status></td>
-                    <td>{application.status === "PENDING" && <button className="button secondary small" onClick={() => cancelApplication(application.id)}>Отменить</button>}</td>
-                  </tr>
-                ))}
+                    <td><Status type={uiState === "APPROVED" ? "success" : ["REJECTED", "WITHDRAWN", "TERMS_CHANGED"].includes(uiState) ? "danger" : "pending"}>{uiState === "TERMS_CHANGED" ? "Условия изменились" : uiState === "CREATOR_REACCEPTED" ? "Новые условия приняты" : applicationStatusLabels[application.status]}</Status></td>
+                    <td>{application.status === "PENDING" && <button className="button secondary small" onClick={() => withdrawApplication(application.id)}>Отозвать</button>}</td>
+                  </tr>;
+                })}
               </tbody>
             </table>
           </div>
@@ -1350,6 +1416,14 @@ function CreatorDashboard({ user, applications, relationships, offers, finance, 
           </div>
           {!finance.orders?.items?.length && <div className="empty-state">Атрибутированных продаж пока нет.</div>}
           {Number(finance.summary?.debtKopecks || 0) > 0 && <div className="creator-warning compact-warning"><span className="warning-mark">!</span><strong>Задолженность после возвратов: {moneyKopecks(finance.summary.debtKopecks)}</strong></div>}
+          {!!finance.payouts?.items?.length && (
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead><tr><th>Дата</th><th>Сумма</th><th>Валюта</th><th>Статус</th></tr></thead>
+                <tbody>{finance.payouts.items.map((payout) => <tr key={payout.id}><td>{new Date(payout.createdAt).toLocaleDateString("ru-RU")}</td><td>{moneyKopecks(payout.amountKopecks)}</td><td>{payout.currency}</td><td><Status type={payout.status === "PAID" ? "success" : "pending"}>{payout.status}</Status></td></tr>)}</tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </DashboardLayout>
@@ -1674,15 +1748,35 @@ function SalesTrackingLive({ notify, preview, onUpload, onConfirm }) {
 
 function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview, onSaveScenarios }) {
   const brandOffers = offers;
-  const [selectedOfferId, setSelectedOfferId] = useState(brandOffers[0] ? brandOffers[0].id : null);
+  const [selectedOfferId, setSelectedOfferId] = useState(
+    brandOffers.some((offer) => offer.id === initialOfferId)
+      ? initialOfferId
+      : brandOffers[0]?.id || null
+  );
   const [preview, setPreview] = useState(false);
-  const [previewAccess, setPreviewAccess] = useState("digital");
+  const [previewSource, setPreviewSource] = useState("DRAFT");
+  const [previewProduct, setPreviewProduct] = useState("NOT_GRANTED");
+  const [previewAffiliate, setPreviewAffiliate] = useState("INACTIVE");
+  const [previewCreatorId, setPreviewCreatorId] = useState("");
   const [previewKit, setPreviewKit] = useState(null);
   const [scenarioDrafts, setScenarioDrafts] = useState([]);
   const [scenariosLoaded, setScenariosLoaded] = useState(false);
   const [scenarioErrors, setScenarioErrors] = useState({});
   const [savingScenarios, setSavingScenarios] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadFocused, setUploadFocused] = useState(false);
+  const [editor, setEditor] = useState(null);
+  const [scenarioForm, setScenarioForm] = useState({
+    id: "",
+    channel: "REELS",
+    title: "",
+    hook: "",
+    mainIdea: "",
+    structure: "",
+    cta: "",
+    accessLevel: "DIGITAL",
+    requiresAffiliateApproval: false
+  });
   const [uploadForm, setUploadForm] = useState({
     file: null,
     title: "",
@@ -1708,6 +1802,24 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
       }
     : null;
   const uploadAllowed = verificationStatus === "VERIFIED";
+  const offerRelationships = relationships.filter((item) => item.offerId === selectedOffer?.id);
+  const relevantCreators = Array.from(
+    new Map(offerRelationships.map((item) => [item.creator.id, item.creator])).values()
+  );
+
+  useEffect(() => {
+    if (!["assets", "scenarios"].includes(initialFocus) || uploadFocused || !editor || !selectedOffer) return undefined;
+    const timer = window.setTimeout(() => {
+      const targetId = initialFocus === "scenarios" ? "creator-kit-scenarios" : "creator-kit-assets-upload";
+      const targetSection = document.getElementById(targetId);
+      if (!targetSection) return;
+      targetSection.scrollIntoView({ behavior: "smooth", block: "start" });
+      const focusSelector = initialFocus === "scenarios" ? 'input:not([type]), input[type="text"]' : 'input[type="file"]';
+      targetSection.querySelector(focusSelector)?.focus({ preventScroll: true });
+      setUploadFocused(true);
+    }, 100);
+    return () => window.clearTimeout(timer);
+  }, [editor, initialFocus, selectedOffer, uploadFocused]);
 
   const updateUpload = (key, value) => setUploadForm((current) => ({ ...current, [key]: value }));
 
@@ -1726,17 +1838,237 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
 
   const loadPreview = async (access = previewAccess) => {
     if (!selectedOffer) return;
+    if (!previewCreatorId) {
+      notify("Сначала одобрите заявку креатора и выберите его для предпросмотра");
+      return;
+    }
     try {
-      const nextKit = await onLoadPreview(selectedOffer.id, access);
-      setPreviewKit(nextKit);
+      const raw = await api(`/brand/offers/${selectedOffer.id}/creator-kit/preview-as-creator`, {
+        method: "POST",
+        body: JSON.stringify({
+          source: previewSource,
+          ...(previewCreatorId ? { creatorId: previewCreatorId } : {}),
+          productAccess: previewProduct,
+          affiliateApproval: previewAffiliate
+        })
+      });
+      setPreviewKit(mapCreatorKit(raw, selectedOffer));
     } catch (error) {
       notify(error.message);
     }
   };
 
   useEffect(() => {
-    if (preview && selectedOffer) loadPreview(previewAccess);
-  }, [preview, previewAccess, selectedOffer?.id]);
+    if (!selectedOffer?.creatorKit) return;
+    resetEditor(selectedOffer.creatorKit);
+    setPreviewKit(null);
+    setRestoreDetails(null);
+    loadMetadata(selectedOffer.id).catch((error) => notify(error.message));
+  }, [selectedOffer?.id, selectedOffer?.creatorKit?.revision?.id]);
+
+  useEffect(() => {
+    if (!relevantCreators.some((creator) => creator.id === previewCreatorId)) {
+      setPreviewCreatorId(relevantCreators[0]?.id || "");
+    }
+  }, [selectedOffer?.id, offerRelationships.length]);
+
+  useEffect(() => {
+    if (preview && selectedOffer) loadPreview();
+  }, [preview, previewSource, previewProduct, previewAffiliate, previewCreatorId, selectedOffer?.id]);
+
+  const refresh = async () => {
+    await onReload();
+    if (selectedOffer) await loadMetadata(selectedOffer.id);
+  };
+
+  const updateEditor = (key, value) => setEditor((current) => ({ ...current, [key]: value }));
+  const lines = (value) => String(value || "").split("\n").map((item) => item.trim()).filter(Boolean);
+
+  const saveContent = async () => {
+    if (!selectedOffer || !editor) return;
+    setSaving(true);
+    try {
+      await api(`/brand/offers/${selectedOffer.id}/creator-kit`, {
+        method: "PUT",
+        body: JSON.stringify({
+          brandContent: {
+            description: editor.brandDescription,
+            history: editor.brandHistory,
+            values: lines(editor.brandValues),
+            positioning: editor.brandPositioning,
+            accessLevel: editor.brandAccessLevel,
+            requiresAffiliateApproval: editor.brandAffiliate
+          },
+          productContent: {
+            description: editor.productDescription,
+            benefits: lines(editor.productBenefits),
+            usageInstructions: editor.usageInstructions,
+            accessLevel: editor.productAccessLevel,
+            requiresAffiliateApproval: editor.productAffiliate
+          },
+          facts: editor.facts.filter((item) => item.value.trim()).map((item, index) => ({
+            type: item.type,
+            value: item.value,
+            accessLevel: item.accessLevel || "DIGITAL",
+            requiresAffiliateApproval: Boolean(item.requiresAffiliateApproval),
+            sortOrder: index
+          })),
+          claims: [
+            ...lines(editor.allowedClaims).map((value, index) => ({ type: "ALLOWED", value, accessLevel: "DIGITAL", requiresAffiliateApproval: false, sortOrder: index })),
+            ...lines(editor.forbiddenClaims).map((value, index) => ({ type: "FORBIDDEN", value, accessLevel: "DIGITAL", requiresAffiliateApproval: false, sortOrder: index }))
+          ],
+          rules: lines(editor.rules).map((value, index) => ({ value, accessLevel: "DIGITAL", requiresAffiliateApproval: false, sortOrder: index })),
+          publicationRequirements: {
+            mandatoryMentions: lines(editor.mandatoryMentions),
+            advertisingLabel: editor.advertisingLabel || undefined,
+            hashtags: editor.hashtags.split(/\s+/).filter(Boolean),
+            brandMention: editor.brandMention || undefined,
+            approvalRequired: editor.approvalRequired,
+            allowedPlatforms: lines(editor.allowedPlatforms),
+            accessLevel: editor.publicationAccessLevel,
+            requiresAffiliateApproval: editor.publicationAffiliate
+          }
+        })
+      });
+      await refresh();
+      notify("Черновик Creator Kit сохранён");
+    } catch (error) {
+      notify(error.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveScenario = async () => {
+    if (!selectedOffer) return;
+    const payload = {
+      channel: scenarioForm.channel,
+      title: scenarioForm.title,
+      hook: scenarioForm.hook || undefined,
+      mainIdea: scenarioForm.mainIdea,
+      structure: scenarioForm.structure || undefined,
+      cta: scenarioForm.cta || undefined,
+      accessLevel: scenarioForm.accessLevel,
+      requiresAffiliateApproval: scenarioForm.requiresAffiliateApproval,
+      sortOrder: scenarioForm.id
+        ? selectedOffer.creatorKit.scenarios.find((item) => item.id === scenarioForm.id)?.sortOrder || 0
+        : selectedOffer.creatorKit.scenarios.length
+    };
+    try {
+      await api(
+        scenarioForm.id
+          ? `/brand/offers/${selectedOffer.id}/creator-kit/scenarios/${scenarioForm.id}`
+          : `/brand/offers/${selectedOffer.id}/creator-kit/scenarios`,
+        { method: scenarioForm.id ? "PATCH" : "POST", body: JSON.stringify(payload) }
+      );
+      setScenarioForm({ id: "", channel: "REELS", title: "", hook: "", mainIdea: "", structure: "", cta: "", accessLevel: "DIGITAL", requiresAffiliateApproval: false });
+      await refresh();
+      notify("Сценарий сохранён");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const editScenario = (scenario) => setScenarioForm({
+    id: scenario.id,
+    channel: scenario.channelValue || scenarioChannelValues[scenario.channel] || "REELS",
+    title: scenario.title,
+    hook: scenario.hook || "",
+    mainIdea: scenario.mainIdea || scenario.idea || "",
+    structure: scenario.structure || "",
+    cta: scenario.cta || "",
+    accessLevel: scenario.accessLevel || "DIGITAL",
+    requiresAffiliateApproval: Boolean(scenario.requiresAffiliateApproval)
+  });
+
+  const removeScenario = async (scenarioId) => {
+    try {
+      await api(`/brand/offers/${selectedOffer.id}/creator-kit/scenarios/${scenarioId}`, { method: "DELETE" });
+      await refresh();
+      notify("Сценарий удалён");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const moveScenario = async (scenarioId, direction) => {
+    const ids = selectedOffer.creatorKit.scenarios.map((item) => item.id);
+    const index = ids.indexOf(scenarioId);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= ids.length) return;
+    [ids[index], ids[target]] = [ids[target], ids[index]];
+    try {
+      await api(`/brand/offers/${selectedOffer.id}/creator-kit/scenarios/reorder`, {
+        method: "PUT",
+        body: JSON.stringify({ scenarioIds: ids })
+      });
+      await refresh();
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const publishKit = async () => {
+    try {
+      await api(`/brand/offers/${selectedOffer.id}/creator-kit/publish`, {
+        method: "POST",
+        body: JSON.stringify({ publisherNote: "Публикация из кабинета бренда" })
+      });
+      await refresh();
+      notify("Новая версия Creator Kit опубликована");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const createDraftFromRevision = async (revisionId) => {
+    try {
+      await api(`/brand/offers/${selectedOffer.id}/creator-kit/revisions/${revisionId}/create-draft`, { method: "POST" });
+      await refresh();
+      notify("Черновик создан из выбранной версии");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const previewRestore = async (revisionId) => {
+    try {
+      const details = await api(`/brand/offers/${selectedOffer.id}/creator-kit/revisions/${revisionId}/restore-preview`);
+      setRestoreDetails(details);
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const restoreRevision = async () => {
+    if (!restoreDetails) return;
+    const confirmed = window.confirm(`Будет активирована новая ревизия на основе v${restoreDetails.targetRevision.revisionNumber}. ${restoreDetails.diff.summary}. Продолжить?`);
+    if (!confirmed) return;
+    try {
+      await api(`/brand/offers/${selectedOffer.id}/creator-kit/revisions/${restoreDetails.targetRevision.id}/restore`, {
+        method: "POST",
+        body: JSON.stringify({ expectedActiveRevisionId: restoreDetails.activeRevision.id, publisherNote: "Восстановление из истории" })
+      });
+      setRestoreDetails(null);
+      await refresh();
+      notify("Историческая версия восстановлена новой ревизией");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const changeProductAccess = async (creatorId, active) => {
+    try {
+      await api(`/brand/offers/${selectedOffer.id}/product-access/${creatorId}/${active ? "revoke" : "grant"}`, {
+        method: "POST",
+        body: JSON.stringify({ reason: active ? "Отозвано брендом" : "Ручной Product Access для закрытого пилота" })
+      });
+      await loadMetadata(selectedOffer.id);
+      notify(active ? "Product Access отозван" : "Product Access выдан");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
 
   const submitUpload = async (event) => {
     event.preventDefault();
@@ -1786,6 +2118,7 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
   };
 
   if (!selectedOffer) return <div className="empty-state">Создайте оффер, чтобы заполнить Creator Kit.</div>;
+  if (!kit || !editor) return <div className="empty-state">Загрузка Creator Kit…</div>;
 
   return (
     <div className="brand-kit-manager">
@@ -1806,7 +2139,7 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
           <div className="completion-ring" style={{ "--completion": `${kit.completeness * 3.6}deg` }}>
             <span>{kit.completeness}%</span>
           </div>
-          <div><span>Заполненность Creator Kit</span><strong>Готов к публикации</strong><small>Добавьте срок действия для одного файла</small></div>
+          <div><span>Заполненность Creator Kit</span><strong>{kit.readyToPublish ? "Основные разделы заполнены" : "Требуется заполнение"}</strong><small>{kit.completenessMissing.length ? `Не хватает: ${kit.completenessMissing.join(", ")}` : "Обязательные разделы заполнены"}</small></div>
         </div>
         <div className="stat-card"><span className="stat-label">Скачивания материалов</span><span className="stat-value">—</span><span className="stat-note">не собираются на этапе MVP</span></div>
         <div className="stat-card"><span className="stat-label">Креаторы использовали</span><span className="stat-value">—</span><span className="stat-note">аналитика будет добавлена позднее</span></div>
@@ -1842,16 +2175,22 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
           </section>
           <form className="creator-kit-upload panel" onSubmit={submitUpload}>
           <div className="panel-header"><div><h2>Добавить материал</h2><p>Файл загружается напрямую в приватное хранилище и подтверждается сервером.</p></div></div>
+          {initialFocus === "assets" && (
+            <div className="creator-kit-upload-arrival" role="status">
+              <strong>Оффер сохранён.</strong>
+              <span>{uploadAllowed ? "Выберите файл ниже и нажмите «Загрузить материал»." : "Загрузка станет доступна после подтверждения бренда администратором."}</span>
+            </div>
+          )}
           {!uploadAllowed && (
             <div className="creator-warning compact-warning">
               <span className="warning-mark">!</span>
-              <strong>Загрузка файлов доступна после ручного подтверждения бренда администратором. Остальные настройки Creator Kit можно заполнять сейчас.</strong>
+              <strong>Загрузка файлов сейчас заблокирована: бренд ещё не подтверждён администратором. После статуса VERIFIED здесь станет доступна кнопка загрузки. Остальные настройки Creator Kit можно заполнять сейчас.</strong>
             </div>
           )}
           <div className="panel-body form-grid">
             <div className="form-group full">
               <label className="form-label">Файл</label>
-              <input className="field" type="file" accept=".jpg,.jpeg,.png,.webp,.mp4,.webm,.mov,.pdf" onChange={(event) => {
+              <input className="field" type="file" disabled={!uploadAllowed} accept=".jpg,.jpeg,.png,.webp,.mp4,.webm,.mov,.pdf" onChange={(event) => {
                 const file = event.target.files?.[0] || null;
                 setUploadForm((current) => ({ ...current, file, title: current.title || file?.name.replace(/\.[^.]+$/, "") || "" }));
               }} />
@@ -1879,22 +2218,27 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
       )}
 
       {preview && (
+        <>
         <div className="preview-notice">
           <div>
             <strong>Предпросмотр глазами креатора</strong>
-            <span>{previewAccess === "digital" ? "До получения физического образца" : "После подтверждённого получения образца"}</span>
+            <span>Симуляция не создаёт партнёрскую связь и не выдаёт Product Access.</span>
           </div>
-          <div className="access-preview-switch">
-            <button className={previewAccess === "digital" ? "active" : ""} onClick={() => setPreviewAccess("digital")}>Digital Access</button>
-            <button className={previewAccess === "product" ? "active" : ""} onClick={() => setPreviewAccess("product")}>Product Access</button>
-          </div>
+          <button className="button secondary small" type="button" onClick={loadPreview}>Обновить preview</button>
         </div>
+        <div className="brand-kit-toolbar preview-controls">
+          <div className="form-group"><label className="form-label">Версия</label><select className="select-field" value={previewSource} onChange={(event) => setPreviewSource(event.target.value)}><option value="DRAFT">Текущий черновик</option><option value="PUBLISHED">Опубликованная версия</option></select></div>
+          <div className="form-group"><label className="form-label">Креатор</label><select className="select-field" value={previewCreatorId} onChange={(event) => setPreviewCreatorId(event.target.value)}><option value="">Выберите креатора</option>{relevantCreators.map((creator) => <option value={creator.id} key={creator.id}>{creator.displayName}</option>)}</select></div>
+          <div className="form-group"><label className="form-label">Product Access</label><select className="select-field" value={previewProduct} onChange={(event) => setPreviewProduct(event.target.value)}><option value="NOT_GRANTED">Нет</option><option value="GRANTED">Есть</option>{previewCreatorId && <option value="ACTUAL">Фактический</option>}</select></div>
+          <div className="form-group"><label className="form-label">Affiliate approval</label><select className="select-field" value={previewAffiliate} onChange={(event) => setPreviewAffiliate(event.target.value)}><option value="INACTIVE">Нет</option><option value="ACTIVE">Есть</option>{previewCreatorId && <option value="ACTUAL">Фактический</option>}</select></div>
+        </div>
+        </>
       )}
 
       <CreatorKit
         offer={displayedOffer}
         mode={preview ? "creator" : "brand"}
-        hasProductAccess={preview && previewAccess === "product"}
+        hasProductAccess={preview ? Boolean(previewKit?.accessContext?.hasProductAccess) : false}
         notify={notify}
         onToggleAsset={onToggleAsset}
         onDownloadAsset={onDownloadAsset}
@@ -2185,7 +2529,7 @@ function BrandDashboard({ user, role, managerBrands, activeBrandId, onSelectMana
                     </td>
                     <td><Status type={offer.status === "active" ? "success" : "pending"}>{offer.statusLabel}</Status></td>
                     <td><strong>{offer.creatorKit.completeness}%</strong><span className="table-subtitle"> заполнено</span></td>
-                    <td>{offer.commission}%</td><td>{applications.filter((item) => item.offerId === offer.id).length}</td><td>—</td>
+                    <td><strong>{offer.totalCommission}% всего</strong><span className="table-subtitle">креатору {offer.commission}%</span></td><td>{applications.filter((item) => item.offerId === offer.id).length}</td><td>—</td>
                     <td>
                       <div className="row-actions">
                         <button className="button secondary small" onClick={() => navigate("offer", { offerId: offer.id })}>Открыть</button>
@@ -2212,22 +2556,24 @@ function BrandDashboard({ user, role, managerBrands, activeBrandId, onSelectMana
             <table className="data-table">
               <thead><tr><th>Креатор</th><th>Оффер</th><th>Сообщение</th><th>Статус</th><th></th></tr></thead>
               <tbody>
-                {applications.map((application) => (
-                  <tr key={application.id}>
+                {applications.map((application) => {
+                  const uiState = applicationUiState(application);
+                  const approvalBlocked = uiState === "TERMS_CHANGED";
+                  return <tr key={application.id}>
                     <td><span className="table-title">{application.creator.displayName}</span><span className="table-subtitle">{application.creator.description || "Описание профиля не заполнено"}</span></td>
                     <td>{application.offer.title}</td>
-                    <td>{application.message || "Без сообщения"}</td>
-                    <td><Status type={application.status === "APPROVED" ? "success" : application.status === "REJECTED" ? "danger" : "pending"}>{applicationStatusLabels[application.status]}</Status></td>
+                    <td>{application.message || "Без сообщения"}{approvalBlocked && <span className="table-subtitle">Старая ставка: {formatRateBps(application.latestAcceptedTerms?.creatorEffectiveGmvBps || application.termsObservation?.displayedCreatorEffectiveBps)} · текущая: {formatRateBps(application.applicableCommercialTerms?.creatorEffectiveGmvBps)}</span>}</td>
+                    <td><Status type={application.status === "APPROVED" ? "success" : application.status === "REJECTED" || approvalBlocked ? "danger" : "pending"}>{approvalBlocked ? "Ожидается согласие креатора" : uiState === "CREATOR_REACCEPTED" ? "Новые условия приняты" : applicationStatusLabels[application.status]}</Status></td>
                     <td>
                       {application.status === "PENDING" && (
                         <div className="row-actions">
                           <button className="button secondary small" onClick={() => updateApplication(application.id, "reject")}>Отклонить</button>
-                          <button className="button small" onClick={() => updateApplication(application.id, "approve")}>Одобрить</button>
+                          <button className="button small" disabled={approvalBlocked} title={approvalBlocked ? "Креатор должен принять текущие коммерческие условия" : ""} onClick={() => updateApplication(application.id, "approve")}>Одобрить</button>
                         </div>
                       )}
                     </td>
-                  </tr>
-                ))}
+                  </tr>;
+                })}
               </tbody>
             </table>
           </div>
@@ -2321,6 +2667,35 @@ function BrandDashboard({ user, role, managerBrands, activeBrandId, onSelectMana
         </div>
       )}
 
+      {tab === "finance" && (
+        <div className="panel">
+          <div className="panel-header"><h2>Финансовый обзор</h2><Status type="success">Серверный расчёт</Status></div>
+          <div className="stats-grid panel-body">
+            <div className="stat-card"><span className="stat-label">Атрибутированный GMV</span><span className="stat-value">{moneyKopecks(finance.overview?.attributedGmvMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Подтверждённый GMV</span><span className="stat-value">{moneyKopecks(finance.overview?.confirmedGmvMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Креаторам</span><span className="stat-value">{moneyKopecks(finance.overview?.creatorCommissionsAccruedMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Связке</span><span className="stat-value">{moneyKopecks(finance.overview?.platformFeesAccruedMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">К оплате</span><span className="stat-value">{moneyKopecks(finance.overview?.totalPayableMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Оплачено</span><span className="stat-value">{moneyKopecks(finance.overview?.paidMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Не оплачено</span><span className="stat-value">{moneyKopecks(finance.overview?.unpaidMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Просрочено</span><span className="stat-value">{moneyKopecks(finance.overview?.overdueMinor)}</span></div>
+          </div>
+        </div>
+      )}
+
+      {tab === "statements" && (
+        <div className="panel">
+          <div className="panel-header"><h2>Settlement statements</h2><Status type="success">Неизменяемые после выпуска</Status></div>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Период</th><th>Креаторам</th><th>Связке</th><th>К оплате</th><th>Оплачено</th><th>Статус</th></tr></thead>
+              <tbody>{(finance.statements || []).map((statement) => <tr key={statement.id}><td>{new Date(statement.periodStart).toLocaleDateString("ru-RU")} — {new Date(statement.periodEnd).toLocaleDateString("ru-RU")}</td><td>{moneyKopecks(statement.creatorObligationsMinor)}</td><td>{moneyKopecks(statement.platformFeeMinor)}</td><td>{moneyKopecks(statement.totalDueMinor)}</td><td>{moneyKopecks(statement.paidMinor)}</td><td><Status type={statement.status === "PAID" ? "success" : statement.status === "OVERDUE" ? "danger" : "pending"}>{statement.status}</Status></td></tr>)}</tbody>
+            </table>
+          </div>
+          {!finance.statements?.length && <div className="empty-state">Выпущенных statements пока нет.</div>}
+        </div>
+      )}
+
       {tab === "tracking" && <SalesTrackingLive notify={notify} preview={orderImportPreview} onUpload={onUploadOrders} onConfirm={onConfirmOrders} />}
       {tab === "creatorKit" && <BrandCreatorKitManager offers={offers} verificationStatus={user?.profile?.verificationStatus} notify={notify} onToggleAsset={onToggleAsset} onDownloadAsset={onDownloadAsset} onUploadAsset={onUploadAsset} onLoadPreview={onLoadPreview} onSaveScenarios={onSaveScenarios} />}
     </DashboardLayout>
@@ -2344,11 +2719,12 @@ function CreateOfferPage({ publish, navigate, initialOffer, managers, onChangeOf
     description: initialOffer?.description || "Ночной уход для восстановления и увлажнения кожи.",
     productUrl: initialOffer?.productUrl || "https://example.test/products/renewal",
     price: initialOffer?.price ?? 7200,
-    commission: initialOffer?.commission ?? 17,
+    commission: initialOffer?.totalCommission ?? initialOffer?.commission ?? 15,
     threshold: initialOffer?.threshold ?? 5,
     terms: "Нативная интеграция в контент об уходе и образе жизни.",
     promotionWithoutSample: initialOffer?.creatorKit?.promotionWithoutSample || "restricted",
     allowedDigitalFormats: initialOffer?.creatorKit?.allowedDigitalFormats || [...digitalFormats],
+    productFacts: formatOfferProductFacts(initialProductFacts),
     allowedClaims: "Подходит для ежедневного ухода; бренд указывает в составе…",
     forbiddenClaims: "Я протестировала и рекомендую; гарантированно решает проблему",
     publicationRequirements: "Указать название и цену, добавить маркировку рекламы, упомянуть @lunea.",
@@ -2357,6 +2733,18 @@ function CreateOfferPage({ publish, navigate, initialOffer, managers, onChangeOf
   const [scenarioErrors, setScenarioErrors] = useState({});
 
   const update = (key, value) => setForm({ ...form, [key]: value });
+  const categorySelectValue = getOfferCategorySelectValue(form.category);
+  const updateCategory = (value) => {
+    setCategoryError("");
+    update("category", value);
+  };
+  const selectCategory = (value) => {
+    if (value === OFFER_CATEGORY_OTHER) {
+      updateCategory(categorySelectValue === OFFER_CATEGORY_OTHER ? form.category : "");
+      return;
+    }
+    updateCategory(value);
+  };
   const toggleFormat = (format) => {
     update(
       "allowedDigitalFormats",
@@ -2365,11 +2753,23 @@ function CreateOfferPage({ publish, navigate, initialOffer, managers, onChangeOf
         : [...form.allowedDigitalFormats, format]
     );
   };
+  const previewEconomics = calculatePoolEconomics(
+    Math.round(form.commission * 100),
+    Math.round(form.price * 100)
+  );
+  const creatorPreviewRate = previewEconomics.creatorEffectiveBps / 100;
+  const platformPreviewRate = previewEconomics.platformEffectiveBps / 100;
   const previewBase = {
     ...form,
+    commission: creatorPreviewRate,
+    totalCommission: form.commission,
     id: 99,
-    brand: "LUNEA",
-    image: productImages.cosmetics,
+    brand: brandName || initialOffer?.brand || "Бренд",
+    image: getOfferPreviewImage(
+      imagePreviewUrl,
+      initialOffer?.image,
+      initialOffer ? productImages.skincare : productImages.cosmetics
+    ),
     status: "review",
     applications: 0,
     sales: 0
@@ -2431,18 +2831,67 @@ function CreateOfferPage({ publish, navigate, initialOffer, managers, onChangeOf
               <p>Основная информация, которую увидит креатор.</p>
               <div className="form-grid">
                 <div className="form-group full"><label className="form-label">Название</label><input className="field" value={form.title} onChange={(e) => update("title", e.target.value)} /></div>
-                <div className="form-group"><label className="form-label">Категория</label><select className="select-field" value={form.category} onChange={(e) => update("category", e.target.value)}><option>Красота и уход</option><option>Одежда и обувь</option><option>Дом и интерьер</option><option>Аксессуары</option></select></div>
+                <div className="form-group">
+                  <label className="form-label">Категория</label>
+                  <select className="select-field" value={categorySelectValue} onChange={(event) => selectCategory(event.target.value)}>
+                    {OFFER_CATEGORY_PRESETS.map((category) => <option key={category}>{category}</option>)}
+                    <option value={OFFER_CATEGORY_OTHER}>{OFFER_CATEGORY_OTHER}</option>
+                  </select>
+                  {categorySelectValue === OFFER_CATEGORY_OTHER && (
+                    <>
+                      <input
+                        className="field"
+                        value={form.category}
+                        onChange={(event) => updateCategory(event.target.value)}
+                        placeholder="Например, экотовары или книги"
+                        maxLength={120}
+                        aria-invalid={Boolean(categoryError)}
+                        aria-describedby="offer-category-hint"
+                      />
+                      <span id="offer-category-hint" className={`form-hint ${categoryError ? "error" : ""}`}>
+                        {categoryError || "Уточнение сохранится как отдельная категория и поможет расширить список."}
+                      </span>
+                    </>
+                  )}
+                </div>
                 <div className="form-group"><label className="form-label">Цена, ₽</label><input className="field" type="number" value={form.price} onChange={(e) => update("price", Number(e.target.value))} /></div>
                 <div className="form-group full"><label className="form-label">Ссылка на товар</label><input className="field" type="url" value={form.productUrl} onChange={(e) => update("productUrl", e.target.value)} placeholder="https://brand.ru/products/product" /></div>
                 <div className="form-group full"><label className="form-label">Описание</label><textarea className="textarea" value={form.description} onChange={(e) => update("description", e.target.value)} /></div>
-                <div className="form-group full"><label className="form-label">Изображения</label><div className="upload-box">Демонстрационная область загрузки<br />Изображение уже добавлено в предпросмотр</div></div>
+                <div className="form-group full">
+                  <label className="form-label">Изображение товара</label>
+                  <input
+                    className="field"
+                    type="file"
+                    accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                    disabled={!uploadAllowed}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0] || null;
+                      setImageError("");
+                      setImageFile(file);
+                    }}
+                    aria-invalid={Boolean(imageError)}
+                    aria-describedby="offer-image-hint"
+                  />
+                  <span id="offer-image-hint" className={`form-hint ${imageError ? "error" : ""}`}>
+                    {imageError ||
+                      (!uploadAllowed
+                        ? "Загрузка доступна после подтверждения бренда администратором."
+                        : imageFile
+                          ? `${imageFile.name} — изображение справа уже обновлено.`
+                          : initialOffer?.imageUrl
+                            ? "Текущее изображение сохранено. Выберите новый файл, чтобы заменить его."
+                            : "Выберите JPG, PNG или WebP до 25 МБ — изображение справа обновится сразу.")}
+                  </span>
+                </div>
               </div>
             </section>
             <section className="form-section">
               <h2>Партнёрские условия</h2>
-              <p>Комиссия начисляется после подтверждения продажи.</p>
+              <p>Укажите общий commission pool. Распределение 65/35 рассчитывает сервер.</p>
               <div className="form-grid">
-                <div className="form-group"><label className="form-label">Комиссия, %</label><input className="field" type="number" value={form.commission} onChange={(e) => update("commission", Number(e.target.value))} /></div>
+                <div className="form-group"><label className="form-label">Общая комиссия Brand, %</label><input className="field" type="number" min="0" max="100" step="0.01" value={form.commission} onChange={(e) => update("commission", Number(e.target.value))} /></div>
+                <div className="form-group"><label className="form-label">Креатор получает</label><div className="field" aria-live="polite">{creatorPreviewRate}% от GMV</div></div>
+                <div className="form-group"><label className="form-label">Service fee Связки</label><div className="field" aria-live="polite">{platformPreviewRate}% от GMV</div></div>
                 <div className="form-group"><label className="form-label">Продаж до запроса товара</label><input className="field" type="number" value={form.threshold} onChange={(e) => update("threshold", Number(e.target.value))} /></div>
                 <div className="form-group full"><label className="form-label">Условия продвижения</label><textarea className="textarea" value={form.terms} onChange={(e) => update("terms", e.target.value)} /></div>
               </div>
@@ -2455,7 +2904,7 @@ function CreateOfferPage({ publish, navigate, initialOffer, managers, onChangeOf
                 <div className="policy-options">
                   {[
                     ["yes", "Да", "Все материалы Digital Access доступны после одобрения заявки."],
-                    ["no", "Нет, продукт обязателен", "Материалы откроются только после подтверждённого получения образца."],
+                    ["no", "Нет, продукт обязателен", "Материалы откроются только после ручной выдачи Product Access брендом."],
                     ["restricted", "Да, но только в разрешённых форматах", "Креатор увидит выбранные форматы и правила без личного тестирования."]
                   ].map(([value, title, copy]) => (
                     <label className={`policy-option ${form.promotionWithoutSample === value ? "selected" : ""}`} key={value}>
@@ -2482,15 +2931,21 @@ function CreateOfferPage({ publish, navigate, initialOffer, managers, onChangeOf
 
               <div className="creator-kit-form-block">
                 <div>
-                  <h3>Библиотека визуальных материалов</h3>
-                  <p>Для каждого файла права использования настраиваются отдельно.</p>
+                  <h3>Материалы загружаются после сохранения оффера</h3>
+                  <p>Это перечень поддерживаемых типов, а не кнопки загрузки. Сохраните оффер — мы сразу откроем форму выбора файла в Creator Kit.</p>
                 </div>
                 <div className="material-type-grid">
                   {["Фото", "Вертикальные видео", "Горизонтальные видео", "PNG без фона", "Логотипы", "Lifestyle-контент", "Видео текстуры", "Видео использования", "Рекламные баннеры"].map((type, index) => (
-                    <span className={index < 6 ? "filled" : ""} key={type}>{type}<small>{index < 6 ? "Добавлено" : "Не добавлено"}</small></span>
+                    <span key={type}>{type}<small>Доступно в Creator Kit</small></span>
                   ))}
                 </div>
-                <div className="upload-box">Добавить материал и настроить: формат, редактирование, текст, платную рекламу, согласование и срок действия</div>
+                <div className="upload-box">
+                  <strong>Следующий шаг</strong>
+                  <span>Сохраните оффер. На следующем экране выберите файл и нажмите «Загрузить материал».</span>
+                  <button className="button" type="button" disabled={saving} onClick={() => submitOffer(false, "creatorKit")}>
+                    {saving ? "Сохраняем…" : "Сохранить оффер и открыть загрузку материалов"}
+                  </button>
+                </div>
               </div>
 
               <div className="creator-kit-form-block">
@@ -2511,7 +2966,7 @@ function CreateOfferPage({ publish, navigate, initialOffer, managers, onChangeOf
                   />
                 )}
                 <div className="form-grid compact-form-grid">
-                  <div className="form-group"><label className="form-label">Факты о продукте</label><textarea className="textarea" value="Описание, преимущества, состав, применение, цена, объём, производство, аудитория и ограничения" readOnly /></div>
+                  <div className="form-group"><label className="form-label">Факты о продукте</label><textarea className="textarea" value={form.productFacts} onChange={(event) => update("productFacts", event.target.value)} placeholder={PRODUCT_FACTS_PLACEHOLDER} /></div>
                   <div className="form-group"><label className="form-label">Требования к публикации</label><textarea className="textarea" value={form.publicationRequirements} onChange={(e) => update("publicationRequirements", e.target.value)} /></div>
                   <div className="form-group"><label className="form-label">Разрешённые формулировки</label><textarea className="textarea" value={form.allowedClaims} onChange={(e) => update("allowedClaims", e.target.value)} /></div>
                   <div className="form-group"><label className="form-label">Запрещённые формулировки</label><textarea className="textarea" value={form.forbiddenClaims} onChange={(e) => update("forbiddenClaims", e.target.value)} /></div>
@@ -2535,15 +2990,16 @@ function CreateOfferPage({ publish, navigate, initialOffer, managers, onChangeOf
             <OfferCard offer={previewOffer} onOpen={() => {}} />
             <div className="panel" style={{ marginTop: 14 }}>
               <div className="panel-body">
-                <span className="term-label">Комиссия с одной продажи</span>
+                <span className="term-label">Общий расход Brand с одной продажи</span>
                 <strong style={{ fontSize: 22 }}>{money(Math.round(form.price * form.commission / 100))}</strong>
+                <span className="stat-note">Креатор: {money(Math.round(form.price * creatorPreviewRate / 100))} · Связка: {money(Math.round(form.price * platformPreviewRate / 100))}</span>
               </div>
             </div>
             <div className="panel" style={{ marginTop: 14 }}>
               <div className="panel-body">
                 <span className="term-label">Creator Kit</span>
                 <strong style={{ display: "block", marginTop: 5 }}>Digital Access · {form.allowedDigitalFormats.length} форматов</strong>
-                <span className="stat-note">Product Access откроется после получения образца</span>
+                <span className="stat-note">Product Access выдаётся брендом вручную в закрытом пилоте</span>
               </div>
             </div>
           </aside>
@@ -2553,11 +3009,25 @@ function CreateOfferPage({ publish, navigate, initialOffer, managers, onChangeOf
   );
 }
 
-function AdminDashboard({ user, offers, brands, operationalReadiness, finance, createPayout, approvePayout, markPayoutPaid, cancelPayout, verifyBrand, changeAdminPassword, beginAdminMfa, confirmAdminMfa }) {
+function AdminDashboard({ user, offers, brands, creators, applications, operationalReadiness, finance, createPayout, approvePayout, markPayoutPaid, cancelPayout, issueStatement, recordBrandPayment, resolveDispute, runReconciliation, verifyBrand, changeAdminPassword, beginAdminMfa, confirmAdminMfa }) {
   const [tab, setTab] = useState("offers");
   const [securityForm, setSecurityForm] = useState({ currentPassword: "", newPassword: "", code: "" });
   const [mfaEnrollment, setMfaEnrollment] = useState(null);
   const [recoveryCodes, setRecoveryCodes] = useState([]);
+  const [statementForm, setStatementForm] = useState(() => {
+    const now = new Date();
+    const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+    const due = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 10));
+    return {
+      brandId: "",
+      periodStart: start.toISOString().slice(0, 10),
+      periodEnd: end.toISOString().slice(0, 10),
+      dueAt: due.toISOString().slice(0, 10),
+      currency: "RUB"
+    };
+  });
+  const [disputeResolutions, setDisputeResolutions] = useState({});
 
   const updateSecurity = (key, value) => setSecurityForm((current) => ({ ...current, [key]: value }));
 
@@ -2600,6 +3070,9 @@ function AdminDashboard({ user, offers, brands, operationalReadiness, finance, c
         { id: "brands", label: "Бренды" },
         { id: "creators", label: "Креаторы" },
         { id: "applications", label: "Заявки" },
+        { id: "finance", label: "Финансы" },
+        { id: "statements", label: "Statements" },
+        { id: "disputes", label: "Disputes" },
         { id: "payouts", label: "Выплаты" },
         { id: "ledger", label: "Ledger" }
       ]}
@@ -2607,11 +3080,11 @@ function AdminDashboard({ user, offers, brands, operationalReadiness, finance, c
       setActive={setTab}
     >
       <div className="dashboard-header">
-        <div><h1>Админ-панель</h1><p>Обзор тестовых данных и статусов платформы.</p></div>
+        <div><h1>Админ-панель</h1><p>Обзор данных и статусов закрытого пилота.</p></div>
       </div>
       <div className="creator-warning compact-warning">
         <span className="warning-mark">!</span>
-        <strong>Выплаты и финансовый ledger подключены к серверу. Офферы, бренды, креаторы и заявки в этой панели остаются демонстрационными.</strong>
+        <strong>Бренды, креаторы, заявки и финансы подключены к серверу. Список офферов в ADMIN пока остаётся демонстрационным.</strong>
       </div>
       <div className="creator-warning compact-warning">
         <span className="warning-mark">!</span>
@@ -2624,10 +3097,10 @@ function AdminDashboard({ user, offers, brands, operationalReadiness, finance, c
         </div>
       )}
       <div className="stats-grid">
-        <div className="stat-card"><span className="stat-label">Бренды</span><span className="stat-value">6</span><span className="stat-note">в демонстрационных данных</span></div>
-        <div className="stat-card"><span className="stat-label">Креаторы</span><span className="stat-value">148</span><span className="stat-note">тестовые профили</span></div>
+        <div className="stat-card"><span className="stat-label">Бренды</span><span className="stat-value">{finance.overview?.brandCount || 0}</span><span className="stat-note">в финансовом контуре</span></div>
+        <div className="stat-card"><span className="stat-label">Креаторы</span><span className="stat-value">{creators.length}</span><span className="stat-note">зарегистрировано</span></div>
         <div className="stat-card"><span className="stat-label">Офферы</span><span className="stat-value">{offers.length}</span><span className="stat-note">{offers.filter((item) => item.status === "review").length} на проверке</span></div>
-        <div className="stat-card"><span className="stat-label">Активные заявки</span><span className="stat-value">37</span><span className="stat-note">на рассмотрении</span></div>
+        <div className="stat-card"><span className="stat-label">Активные заявки</span><span className="stat-value">{countActiveApplications(applications)}</span><span className="stat-note">требуют обработки</span></div>
       </div>
 
       {tab === "offers" && (
@@ -2666,15 +3139,90 @@ function AdminDashboard({ user, offers, brands, operationalReadiness, finance, c
 
       {tab === "creators" && (
         <div className="panel">
-          <div className="panel-header"><h2>Креаторы</h2></div>
-          <div className="table-wrap"><table className="data-table"><thead><tr><th>Креатор</th><th>Тематика</th><th>Активные офферы</th><th>Статус</th></tr></thead><tbody><tr><td><strong>Анна Лебедева</strong></td><td>Красота и уход</td><td>2</td><td><Status type="success">Активен</Status></td></tr><tr><td><strong>Мария Фролова</strong></td><td>Образ жизни</td><td>3</td><td><Status type="success">Активен</Status></td></tr><tr><td><strong>Елена Петрова</strong></td><td>Мода</td><td>1</td><td><Status type="success">Активен</Status></td></tr></tbody></table></div>
+          <div className="panel-header"><h2>Креаторы</h2><Status type="success">{creators.length} зарегистрировано</Status></div>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Креатор</th><th>О профиле</th><th>Заявки</th><th>Активные офферы</th><th>Статус</th></tr></thead>
+              <tbody>
+                {creators.map((creator) => {
+                  const creatorStatus = getAdminCreatorStatus(creator);
+                  return (
+                    <tr key={creator.id}>
+                      <td><strong>{creator.displayName}</strong></td>
+                      <td>{creator.description || "Не указано"}</td>
+                      <td>{creator._count?.applications || 0}</td>
+                      <td>{creator._count?.affiliateRelationships || 0}</td>
+                      <td><Status type={creatorStatus.type}>{creatorStatus.label}</Status></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {!creators.length && <div className="empty-state">Зарегистрированных креаторов пока нет.</div>}
         </div>
       )}
 
       {tab === "applications" && (
         <div className="panel">
-          <div className="panel-header"><h2>Заявки</h2><Status type="pending">37 активных</Status></div>
-          <div className="table-wrap"><table className="data-table"><thead><tr><th>Креатор</th><th>Бренд</th><th>Оффер</th><th>Статус</th></tr></thead><tbody><tr><td>Анна Лебедева</td><td>LUNEA</td><td>{offers[0].title}</td><td><Status type="success">Одобрена</Status></td></tr><tr><td>Мария Фролова</td><td>SEVER</td><td>{offers[2].title}</td><td><Status type="pending">На рассмотрении</Status></td></tr><tr><td>Елена Петрова</td><td>FORMA</td><td>{offers[1].title}</td><td><Status type="pending">На рассмотрении</Status></td></tr></tbody></table></div>
+          <div className="panel-header"><h2>Заявки</h2><Status type="pending">{countActiveApplications(applications)} активных</Status></div>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Креатор</th><th>Бренд</th><th>Оффер</th><th>Дата</th><th>Статус</th></tr></thead>
+              <tbody>
+                {applications.map((application) => {
+                  const applicationStatus = getAdminApplicationStatus(application);
+                  return (
+                    <tr key={application.id}>
+                      <td>{application.creator.displayName}</td>
+                      <td>{application.offer.brand.brandName}</td>
+                      <td>{application.offer.title}</td>
+                      <td>{new Date(application.createdAt).toLocaleDateString("ru-RU")}</td>
+                      <td><Status type={applicationStatus.type}>{applicationStatus.label}</Status></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {!applications.length && <div className="empty-state">Заявок от креаторов пока нет.</div>}
+        </div>
+      )}
+      {tab === "finance" && (
+        <div className="panel">
+          <div className="panel-header"><h2>Финансы платформы</h2><button className="button small" onClick={runReconciliation}>Запустить reconciliation</button></div>
+          <div className="stats-grid panel-body">
+            <div className="stat-card"><span className="stat-label">Creator-attributed GMV</span><span className="stat-value">{moneyKopecks(finance.overview?.attributedGmvMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Комиссии креаторов</span><span className="stat-value">{moneyKopecks(finance.overview?.creatorCommissionsMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Доход Связки</span><span className="stat-value">{moneyKopecks(finance.overview?.platformRevenueMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Brand obligations</span><span className="stat-value">{moneyKopecks(finance.overview?.brandObligationsMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Не оплачено</span><span className="stat-value">{moneyKopecks(finance.overview?.unpaidObligationsMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Выплачено креаторам</span><span className="stat-value">{moneyKopecks(finance.overview?.paidPayoutsMinor)}</span></div>
+            <div className="stat-card"><span className="stat-label">Открытые disputes</span><span className="stat-value">{finance.overview?.openDisputes || 0}</span></div>
+          </div>
+        </div>
+      )}
+      {tab === "statements" && (
+        <div className="panel">
+          <div className="panel-header"><h2>Brand statements</h2><Status type="success">Immutable after issue</Status></div>
+          <div className="panel-body form-grid">
+            <div className="form-group"><label className="form-label">Бренд</label><select className="field" value={statementForm.brandId} onChange={(event) => setStatementForm((current) => ({ ...current, brandId: event.target.value }))}><option value="">Выберите бренд</option>{brands.map((brand) => <option key={brand.id} value={brand.id}>{brand.brandName}</option>)}</select></div>
+            <div className="form-group"><label className="form-label">Валюта</label><input className="field" value={statementForm.currency} maxLength={3} onChange={(event) => setStatementForm((current) => ({ ...current, currency: event.target.value.toUpperCase() }))} /></div>
+            <div className="form-group"><label className="form-label">Начало периода</label><input className="field" type="date" value={statementForm.periodStart} onChange={(event) => setStatementForm((current) => ({ ...current, periodStart: event.target.value }))} /></div>
+            <div className="form-group"><label className="form-label">Конец периода</label><input className="field" type="date" value={statementForm.periodEnd} onChange={(event) => setStatementForm((current) => ({ ...current, periodEnd: event.target.value }))} /></div>
+            <div className="form-group"><label className="form-label">Срок оплаты</label><input className="field" type="date" value={statementForm.dueAt} onChange={(event) => setStatementForm((current) => ({ ...current, dueAt: event.target.value }))} /></div>
+            <div className="form-actions"><button className="button" disabled={!statementForm.brandId} onClick={() => issueStatement(statementForm)}>Выпустить statement</button></div>
+          </div>
+          <div className="table-wrap"><table className="data-table"><thead><tr><th>Бренд</th><th>Период</th><th>Креаторам</th><th>Связке</th><th>К оплате</th><th>Оплачено</th><th>Статус</th><th></th></tr></thead><tbody>{(finance.statements || []).map((statement) => <tr key={statement.id}><td>{statement.brand?.brandName}</td><td>{new Date(statement.periodStart).toLocaleDateString("ru-RU")} — {new Date(statement.periodEnd).toLocaleDateString("ru-RU")}</td><td>{moneyKopecks(statement.creatorObligationsMinor)}</td><td>{moneyKopecks(statement.platformFeeMinor)}</td><td>{moneyKopecks(statement.totalDueMinor)}</td><td>{moneyKopecks(statement.paidMinor)}</td><td><Status type={statement.status === "PAID" ? "success" : statement.status === "OVERDUE" ? "danger" : "pending"}>{statement.status}</Status></td><td>{statement.status !== "PAID" && BigInt(statement.totalDueMinor || 0) > BigInt(statement.paidMinor || 0) && <button className="button small" onClick={() => recordBrandPayment(statement)}>Зафиксировать оплату остатка</button>}</td></tr>)}</tbody></table></div>
+          {!finance.statements?.length && <div className="empty-state">Statements ещё не выпущены.</div>}
+          {!!finance.payments?.length && <div className="table-wrap"><table className="data-table"><thead><tr><th>Дата платежа</th><th>Бренд</th><th>Сумма</th><th>Референс</th><th>Статус</th></tr></thead><tbody>{finance.payments.map((payment) => <tr key={payment.id}><td>{new Date(payment.paidAt).toLocaleDateString("ru-RU")}</td><td>{payment.brand?.brandName}</td><td>{moneyKopecks(payment.amountMinor)}</td><td>{payment.reference || "—"}</td><td><Status type={payment.status === "CANCELLED" ? "danger" : "success"}>{payment.status}</Status></td></tr>)}</tbody></table></div>}
+        </div>
+      )}
+      {tab === "disputes" && (
+        <div className="panel">
+          <div className="panel-header"><h2>Financial disputes</h2><Status type="pending">{finance.disputes?.filter((item) => item.status === "OPEN").length || 0} открыто</Status></div>
+          <div className="table-wrap"><table className="data-table"><thead><tr><th>Бренд</th><th>Заказ</th><th>Причина</th><th>Дата</th><th>Статус</th><th>Решение</th></tr></thead><tbody>{(finance.disputes || []).map((dispute) => <tr key={dispute.id}><td>{dispute.brand?.brandName}</td><td>{dispute.order?.externalOrderId}</td><td>{dispute.reason}</td><td>{new Date(dispute.openedAt).toLocaleDateString("ru-RU")}</td><td><Status type={dispute.status === "OPEN" ? "danger" : "success"}>{dispute.status}</Status></td><td>{dispute.status === "OPEN" ? <div className="row-actions"><input className="field" value={disputeResolutions[dispute.id] || ""} placeholder="Итог проверки" onChange={(event) => setDisputeResolutions((current) => ({ ...current, [dispute.id]: event.target.value }))} /><button className="button small" disabled={(disputeResolutions[dispute.id] || "").trim().length < 5} onClick={() => resolveDispute(dispute.id, disputeResolutions[dispute.id])}>Закрыть спор</button></div> : dispute.resolution || "—"}</td></tr>)}</tbody></table></div>
+          {!finance.disputes?.length && <div className="empty-state">Disputes отсутствуют.</div>}
         </div>
       )}
       {tab === "payouts" && (
@@ -2708,8 +3256,8 @@ function AdminDashboard({ user, offers, brands, operationalReadiness, finance, c
       )}
       {tab === "ledger" && (
         <div className="panel">
-          <div className="panel-header"><h2>Журнал ledger entries</h2><Status type="success">Неизменяемая история</Status></div>
-          <div className="table-wrap"><table className="data-table"><thead><tr><th>Дата</th><th>Креатор</th><th>Заказ</th><th>Тип</th><th>Сумма</th></tr></thead><tbody>{(finance.ledger?.items || []).map((entry) => <tr key={entry.id}><td>{new Date(entry.createdAt).toLocaleString("ru-RU")}</td><td>{entry.creator.displayName}</td><td>{entry.order.externalOrderId}</td><td>{entry.type}</td><td>{moneyKopecks(entry.amountKopecks)}</td></tr>)}</tbody></table></div>
+          <div className="panel-header"><h2>Balanced ledger transactions</h2><Status type="success">Append-only</Status></div>
+          <div className="table-wrap"><table className="data-table"><thead><tr><th>Дата</th><th>Событие</th><th>Источник</th><th>Заказ / Payout / Statement</th><th>Debit</th><th>Credit</th><th>Валюта</th></tr></thead><tbody>{(finance.ledger?.items || []).map((entry) => { const debit = (entry.postings || []).filter((posting) => posting.direction === "DEBIT").reduce((sum, posting) => sum + BigInt(posting.amountMinor), 0n); const credit = (entry.postings || []).filter((posting) => posting.direction === "CREDIT").reduce((sum, posting) => sum + BigInt(posting.amountMinor), 0n); return <tr key={entry.id}><td>{new Date(entry.createdAt).toLocaleString("ru-RU")}</td><td><strong>{entry.type}</strong><span className="table-subtitle">{entry.eventKey}</span></td><td>{entry.source}</td><td>{entry.order?.externalOrderId || entry.payout?.id || entry.statement?.id || "—"}</td><td>{moneyKopecks(debit)}</td><td>{moneyKopecks(credit)}</td><td>{entry.currency}</td></tr>; })}</tbody></table></div>
         </div>
       )}
     </DashboardLayout>
@@ -2725,14 +3273,25 @@ const STATUS_LABELS = {
 };
 
 function toUiOffer(offer, creatorKitResponse = null) {
+  const creatorEffectiveBps = offer.creatorEffectiveBps ?? offer.creatorCommissionBps;
+  const totalCommissionPoolBps = offer.totalCommissionPoolBps ?? creatorEffectiveBps;
   const base = {
     id: offer.id,
     brand: offer.brand?.brandName || "Бренд",
     title: offer.title,
     category: offer.category || "Товары",
     price: offer.productPriceKopecks / 100,
-    commission: offer.creatorCommissionBps / 100,
+    commission: creatorEffectiveBps / 100,
+    creatorEffectiveBps,
+    totalCommission: totalCommissionPoolBps / 100,
+    totalCommissionPoolBps,
+    platformEffectiveBps: offer.platformEffectiveBps ?? null,
+    offerVersion: offer.offerVersion ?? null,
+    commercialTermsVersion: offer.commercialTermsVersion ?? null,
+    calculationPolicy: offer.calculationPolicy || "LEGACY_DIRECT_RATES_V1",
+    currency: offer.currency || "RUB",
     threshold: offer.productRequirementSales || 0,
+    imageUrl: offer.imageUrl || "",
     image: offer.imageUrl || productImages.skincare,
     status: offer.status === "PUBLISHED" ? "active" : offer.status.toLowerCase(),
     apiStatus: offer.status,
@@ -2804,10 +3363,28 @@ const scenarioChannelValues = Object.fromEntries(Object.entries(scenarioChannelL
 
 function creatorKitPayload(kit) {
   return {
+    brandContent: {
+      description: kit.brandContent?.description || undefined,
+      history: kit.brandContent?.history || undefined,
+      values: kit.brandContent?.values || [],
+      positioning: kit.brandContent?.positioning || undefined,
+      accessLevel: kit.brandContent?.accessLevel || "DIGITAL",
+      requiresAffiliateApproval: Boolean(kit.brandContent?.requiresAffiliateApproval)
+    },
+    productContent: {
+      description: kit.productContent?.description || undefined,
+      benefits: kit.productContent?.benefits || [],
+      usageInstructions: kit.productContent?.usageInstructions || undefined,
+      accessLevel: kit.productContent?.accessLevel || "DIGITAL",
+      requiresAffiliateApproval: Boolean(kit.productContent?.requiresAffiliateApproval)
+    },
     scenarios: (kit.scenarios || []).map((scenario, index) => ({
-      channel: scenarioChannelValues[scenario.channel] || scenario.channel,
+      channel: scenario.channelValue || scenarioChannelValues[scenario.channel] || scenario.channel,
       title: scenario.title,
-      idea: scenario.idea,
+      mainIdea: scenario.mainIdea || scenario.idea,
+      hook: scenario.hook || undefined,
+      structure: scenario.structure || undefined,
+      cta: scenario.cta || undefined,
       accessLevel: scenario.accessLevel || "DIGITAL",
       requiresAffiliateApproval: scenario.requiresAffiliateApproval || false,
       sortOrder: index
@@ -3101,13 +3678,21 @@ function App() {
   const [offers, setOffers] = useState([]);
   const [selectedOfferId, setSelectedOfferId] = useState(null);
   const [editingOfferId, setEditingOfferId] = useState(null);
+  const [brandDashboardTarget, setBrandDashboardTarget] = useState({
+    tab: "offers",
+    creatorKitOfferId: null,
+    creatorKitFocus: null
+  });
   const [registerRole, setRegisterRole] = useState("");
   const [applications, setApplications] = useState([]);
   const [relationships, setRelationships] = useState([]);
-  const [creatorFinance, setCreatorFinance] = useState({ clicks: { items: [] }, orders: { items: [] }, commissions: { items: [] }, summary: {} });
-  const [brandFinance, setBrandFinance] = useState({ orders: { items: [] }, commissions: { items: [] }, analytics: {}, creatorAnalytics: { items: [] } });
-  const [adminFinance, setAdminFinance] = useState({ commissions: { items: [] }, payouts: { items: [] }, ledger: { items: [] } });
+  const [creatorFinance, setCreatorFinance] = useState({ clicks: { items: [] }, orders: { items: [] }, commissions: { items: [] }, payouts: { items: [] }, summary: {} });
+  const [creatorNotifications, setCreatorNotifications] = useState({ items: [], counts: { unread: 0, actionRequired: 0 } });
+  const [brandFinance, setBrandFinance] = useState({ orders: { items: [] }, commissions: { items: [] }, analytics: {}, creatorAnalytics: { items: [] }, overview: {}, statements: [] });
+  const [adminFinance, setAdminFinance] = useState({ commissions: { items: [] }, payouts: { items: [] }, ledger: { items: [] }, overview: {}, statements: [], payments: [], disputes: [] });
   const [adminBrands, setAdminBrands] = useState([]);
+  const [adminCreators, setAdminCreators] = useState([]);
+  const [adminApplications, setAdminApplications] = useState([]);
   const [operationalReadiness, setOperationalReadiness] = useState(null);
   const [orderImportPreview, setOrderImportPreview] = useState(null);
   const [managerBrands, setManagerBrands] = useState([]);
@@ -3144,27 +3729,41 @@ function App() {
         api("/brand/orders?pageSize=100"),
         api("/brand/commissions?pageSize=100"),
         api("/brand/analytics"),
-        api("/brand/analytics/creators?pageSize=100")
+        api("/brand/analytics/creators?pageSize=100"),
+        api("/brand/finance/overview"),
+        api("/brand/statements")
       ]);
-      setBrandFinance({ orders: ordersData, commissions: commissionsData, analytics: analyticsData, creatorAnalytics: creatorAnalyticsData });
+      setBrandFinance({ orders: ordersData, commissions: commissionsData, analytics: analyticsData, creatorAnalytics: creatorAnalyticsData, overview: overviewData, statements: statementsData });
     } else if (currentRole === "creator") {
-      const [clicksData, ordersData, commissionsData, summaryData] = await Promise.all([
+      const [clicksData, ordersData, commissionsData, summaryData, payoutsData, notificationsData, notificationCounts] = await Promise.all([
         api("/creator/clicks?pageSize=100"),
         api("/creator/orders?pageSize=100"),
         api("/creator/commissions?pageSize=100"),
-        api("/creator/earnings-summary")
+        api("/creator/earnings-summary"),
+        api("/creator/payouts?pageSize=100"),
+        api("/creator/notifications"),
+        api("/creator/notifications/unread-count")
       ]);
-      setCreatorFinance({ clicks: clicksData, orders: ordersData, commissions: commissionsData, summary: summaryData });
+      setCreatorFinance({ clicks: clicksData, orders: ordersData, commissions: commissionsData, payouts: payoutsData, summary: summaryData });
+      setCreatorNotifications({ items: notificationsData, counts: notificationCounts });
     } else if (currentRole === "admin") {
-      const [commissionsData, payoutsData, ledgerData, brandsData, readinessData] = await Promise.all([
+      const [commissionsData, payoutsData, ledgerData, brandsData, creatorsData, applicationsData, readinessData, overviewData, statementsData, paymentsData, disputesData] = await Promise.all([
         api("/admin/commissions?pageSize=100"),
         api("/admin/payouts?pageSize=100"),
-        api("/admin/ledger-entries?pageSize=100"),
+        api("/admin/ledger-transactions?pageSize=100"),
         api("/admin/brands"),
-        api("/admin/operations/readiness")
+        api("/admin/creators"),
+        api("/admin/applications"),
+        api("/admin/operations/readiness"),
+        api("/admin/finance/overview"),
+        api("/admin/statements"),
+        api("/admin/brand-payments"),
+        api("/admin/disputes")
       ]);
-      setAdminFinance({ commissions: commissionsData, payouts: payoutsData, ledger: ledgerData });
+      setAdminFinance({ commissions: commissionsData, payouts: payoutsData, ledger: ledgerData, overview: overviewData, statements: statementsData, payments: paymentsData, disputes: disputesData });
       setAdminBrands(brandsData);
+      setAdminCreators(creatorsData);
+      setAdminApplications(applicationsData);
       setOperationalReadiness(readinessData);
     }
   };
@@ -3264,8 +3863,10 @@ function App() {
       try {
         await loadFinance("admin");
       } catch {
-        setAdminFinance({ commissions: { items: [] }, payouts: { items: [] }, ledger: { items: [] } });
+        setAdminFinance({ commissions: { items: [] }, payouts: { items: [] }, ledger: { items: [] }, overview: {}, statements: [], payments: [], disputes: [] });
         setAdminBrands([]);
+        setAdminCreators([]);
+        setAdminApplications([]);
         setOperationalReadiness(null);
       }
     } else {
@@ -3624,9 +4225,13 @@ function App() {
     setOffers([]);
     setApplications([]);
     setRelationships([]);
-    setCreatorFinance({ clicks: { items: [] }, orders: { items: [] }, commissions: { items: [] }, summary: {} });
-    setBrandFinance({ orders: { items: [] }, commissions: { items: [] }, analytics: {}, creatorAnalytics: { items: [] } });
-    setAdminFinance({ commissions: { items: [] }, payouts: { items: [] }, ledger: { items: [] } });
+    setCreatorFinance({ clicks: { items: [] }, orders: { items: [] }, commissions: { items: [] }, payouts: { items: [] }, summary: {} });
+    setCreatorNotifications({ items: [], counts: { unread: 0, actionRequired: 0 } });
+    setBrandFinance({ orders: { items: [] }, commissions: { items: [] }, analytics: {}, creatorAnalytics: { items: [] }, overview: {}, statements: [] });
+    setAdminFinance({ commissions: { items: [] }, payouts: { items: [] }, ledger: { items: [] }, overview: {}, statements: [], payments: [], disputes: [] });
+    setAdminBrands([]);
+    setAdminCreators([]);
+    setAdminApplications([]);
     setOrderImportPreview(null);
     try {
       await loadPublicOffers();
@@ -3640,9 +4245,13 @@ function App() {
 
   const apply = async (offerId, message) => {
     try {
+      const offer = offers.find((item) => item.id === offerId);
       await api(`/creator/offers/${offerId}/applications`, {
         method: "POST",
-        body: JSON.stringify({ ...(message.trim() ? { message: message.trim() } : {}) })
+        body: JSON.stringify({
+          ...(message.trim() ? { message: message.trim() } : {}),
+          ...(offer?.commercialTermsVersion ? { expectedCommercialTermsVersion: offer.commercialTermsVersion } : {})
+        })
       });
       await loadOffers("creator");
       notify("Заявка отправлена бренду");
@@ -3650,6 +4259,33 @@ function App() {
     } catch (error) {
       notify(error.message);
       return false;
+    }
+  };
+
+  const acceptApplicationTerms = async (application) => {
+    try {
+      const version = application.applicableCommercialTerms?.version;
+      await api(`/creator/applications/${application.id}/accept-terms`, {
+        method: "POST",
+        body: JSON.stringify({
+          expectedCommercialTermsVersion: version,
+          expectedApplicationVersion: application.version
+        })
+      });
+      await loadOffers("creator");
+      notify("Новые коммерческие условия приняты");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const withdrawApplication = async (applicationId) => {
+    try {
+      await api(`/creator/applications/${applicationId}/withdraw`, { method: "POST" });
+      await loadOffers("creator");
+      notify("Заявка отозвана");
+    } catch (error) {
+      notify(error.message);
     }
   };
 
@@ -3768,6 +4404,72 @@ function App() {
     }
   };
 
+  const runReconciliation = async () => {
+    try {
+      const result = await api("/admin/reconciliation/run", { method: "POST" });
+      await loadFinance("admin");
+      notify(result.status === "PASSED" ? "Reconciliation пройден" : `Найдены расхождения: ${result.mismatchCount}`);
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const issueStatement = async (form) => {
+    try {
+      await api("/admin/statements", {
+        method: "POST",
+        body: JSON.stringify({
+          brandId: form.brandId,
+          periodStart: `${form.periodStart}T00:00:00.000Z`,
+          periodEnd: `${form.periodEnd}T00:00:00.000Z`,
+          dueAt: `${form.dueAt}T00:00:00.000Z`,
+          currency: form.currency
+        })
+      });
+      await loadFinance("admin");
+      notify("Statement выпущен");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const recordBrandPayment = async (statement) => {
+    try {
+      const remaining = (
+        BigInt(statement.totalDueMinor || 0) -
+        BigInt(statement.paidMinor || 0)
+      ).toString();
+      await api("/admin/brand-payments", {
+        method: "POST",
+        body: JSON.stringify({
+          brandId: statement.brandId,
+          currency: statement.currency,
+          amountMinor: remaining,
+          paidAt: new Date().toISOString(),
+          reference: `statement-${statement.id}`,
+          allocations: [{ statementId: statement.id, amountMinor: remaining }]
+        })
+      });
+      await loadFinance("admin");
+      notify("Оплата Brand зафиксирована");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  const resolveDispute = async (disputeId, resolution) => {
+    try {
+      await api(`/admin/disputes/${disputeId}/resolve`, {
+        method: "POST",
+        body: JSON.stringify({ resolution })
+      });
+      await loadFinance("admin");
+      notify("Dispute закрыт с сохранением AuditLog");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
   const verifyBrand = async (brandId) => {
     try {
       await api(`/admin/brands/${brandId}/verify`, { method: "POST" });
@@ -3819,7 +4521,7 @@ function App() {
     }
   };
 
-  const saveOffer = async (offer, shouldPublish = false, existingOfferId = null) => {
+  const saveOffer = async (offer, shouldPublish = false, existingOfferId = null, options = {}) => {
     try {
       const promotionMap = { yes: "YES", no: "NO", restricted: "LIMITED" };
       const payload = {
@@ -3827,7 +4529,7 @@ function App() {
         description: offer.description,
         productPriceKopecks: Math.round(offer.price * 100),
         ...(offer.productUrl ? { productUrl: offer.productUrl } : {}),
-        creatorCommissionBps: Math.round(offer.commission * 100),
+        totalCommissionPoolBps: Math.round((offer.totalCommission ?? offer.commission) * 100),
         promotionWithoutProduct: promotionMap[offer.creatorKit.promotionWithoutSample],
         category: offer.category,
         productRequirementSales: offer.threshold,
@@ -3848,9 +4550,20 @@ function App() {
       if (shouldPublish) await api(`/brand/offers/${saved.id}/publish`, { method: "POST" });
       await loadOffers(role);
       notify(shouldPublish ? "Оффер сохранён и опубликован" : "Черновик сохранён");
-      navigate("brand");
+      navigate(
+        "brand",
+        ["creatorKit", "creatorKitScenarios"].includes(options.destination)
+          ? {
+              brandTab: "creatorKit",
+              creatorKitOfferId: saved.id,
+              creatorKitFocus: options.destination === "creatorKitScenarios" ? "scenarios" : "assets"
+            }
+          : {}
+      );
+      return true;
     } catch (error) {
       notify(error.message);
+      return false;
     }
   };
 

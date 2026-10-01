@@ -26,6 +26,7 @@ process.env.CREATOR_MINIMUM_PAYOUT_MINOR = '0';
 process.env.STAGE8_WEBHOOK_SECRET_ENCRYPTION_KEY =
   process.env.STAGE8_WEBHOOK_SECRET_ENCRYPTION_KEY ??
   'test_only_stage8_webhook_encryption_key_32_chars';
+process.env.ATTRIBUTION_WINDOW_DAYS = '30';
 process.env.PUBLIC_BACKEND_URL = 'http://localhost:3000';
 process.env.CLICK_IP_HASH_SALT = 'test_only_click_ip_salt_at_least_32_chars';
 process.env.CLICK_RATE_LIMIT_PER_MINUTE = '60';

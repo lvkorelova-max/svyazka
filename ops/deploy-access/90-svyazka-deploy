@@ -1,0 +1,2 @@
+Defaults:deploy !authenticate
+deploy ALL=(root) NOPASSWD: /usr/local/sbin/svyazka-deployctl *

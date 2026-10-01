@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   Optional,
 } from '@nestjs/common';
@@ -33,21 +34,33 @@ const ALLOWED_TRANSITIONS: Record<string, OfferStatus[]> = {
   [OfferStatus.ARCHIVED]: [],
 };
 
+const OFFER_INCLUDE = {
+  brand: true,
+  image: true,
+  currentVersion: true,
+  currentCommercialTerms: true,
+  creatorKit: { select: { activeRevisionId: true } },
+  currentManager: {
+    select: {
+      id: true,
+      managerProfile: { select: { displayName: true } },
+    },
+  },
+} satisfies Prisma.OfferInclude;
+
+type OfferWithImage = Prisma.OfferGetPayload<{ include: typeof OFFER_INCLUDE }>;
+
+const OFFER_IMAGE_MIME_EXTENSIONS: Record<string, string[]> = {
+  'image/jpeg': ['jpg', 'jpeg'],
+  'image/png': ['png'],
+  'image/webp': ['webp'],
+};
+const OFFER_IMAGE_MAX_BYTES = 26_214_400;
+
 @Injectable()
 export class OffersService {
-  private readonly offerInclude = {
-    brand: true,
-    image: true,
-    currentVersion: true,
-    currentCommercialTerms: true,
-    creatorKit: { select: { activeRevisionId: true } },
-    currentManager: {
-      select: {
-        id: true,
-        managerProfile: { select: { displayName: true } },
-      },
-    },
-  } as const;
+  private readonly logger = new Logger(OffersService.name);
+  private readonly offerInclude = OFFER_INCLUDE;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -139,7 +152,7 @@ export class OffersService {
           data: createData,
           include: this.offerInclude,
         });
-    return this.withManagerIdentity(offer);
+    return this.presentOffer(offer);
   }
 
   async listOwn(userId: string, activeBrandId?: string) {
@@ -149,22 +162,15 @@ export class OffersService {
       include: this.offerInclude,
       orderBy: { createdAt: 'desc' },
     });
-    return offers.map((offer) => this.withManagerIdentity(offer));
+    return Promise.all(offers.map((offer) => this.presentOffer(offer)));
   }
 
   async getOwn(userId: string, offerId: string, activeBrandId?: string) {
-    const brand = await this.brands.resolveBrand(userId, activeBrandId);
-    const offer = await this.prisma.offer.findUnique({
-      where: { id: offerId },
-      include: this.offerInclude,
-    });
-    if (!offer) throw new NotFoundException('Оффер не найден');
-    if (offer.brandId !== brand.id) throw new ForbiddenException('Нет доступа к этому офферу');
-    return this.withManagerIdentity(offer);
+    return this.presentOffer(await this.getOwnedOffer(userId, offerId, activeBrandId));
   }
 
   async updateOwn(userId: string, offerId: string, dto: UpdateOfferDto, activeBrandId?: string) {
-    const offer = await this.getOwn(userId, offerId, activeBrandId);
+    const offer = await this.getOwnedOffer(userId, offerId, activeBrandId);
     if (offer.status === OfferStatus.ARCHIVED) {
       throw new BadRequestException('Архивированный оффер нельзя редактировать');
     }
@@ -247,11 +253,11 @@ export class OffersService {
         },
       });
     }
-    return this.withManagerIdentity(updated);
+    return this.presentOffer(updated);
   }
 
   async transition(userId: string, offerId: string, target: OfferStatus, activeBrandId?: string) {
-    const offer = await this.getOwn(userId, offerId, activeBrandId);
+    const offer = await this.getOwnedOffer(userId, offerId, activeBrandId);
     if (!ALLOWED_TRANSITIONS[offer.status].includes(target)) {
       throw new BadRequestException(`Переход ${offer.status} → ${target} недоступен`);
     }
@@ -284,7 +290,7 @@ export class OffersService {
       entityId: offer.id,
       metadata: { previousStatus: offer.status, nextStatus: target },
     });
-    return this.withManagerIdentity(updated);
+    return this.presentOffer(updated);
   }
 
   private assertPublishableProductUrl(productUrl: string | null | undefined) {
@@ -309,7 +315,7 @@ export class OffersService {
     activeBrandId: string,
     managerId: string | null,
   ) {
-    const offer = await this.getOwn(userId, offerId, activeBrandId);
+    const offer = await this.getOwnedOffer(userId, offerId, activeBrandId);
     if (managerId) await this.brands.assertManagerAssignedToBrand(managerId, offer.brandId);
     const updated = await this.prisma.offer.update({
       where: { id: offer.id },
@@ -326,7 +332,7 @@ export class OffersService {
         newManagerId: managerId,
       },
     });
-    return this.withManagerIdentity(updated);
+    return this.presentOffer(updated);
   }
 
   async updateCommercialTerms(
@@ -336,7 +342,7 @@ export class OffersService {
     activeBrandId?: string,
   ) {
     if (!this.commercialTerms) throw new BadRequestException('Коммерческие условия недоступны');
-    await this.getOwn(userId, offerId, activeBrandId);
+    await this.getOwnedOffer(userId, offerId, activeBrandId);
     await this.commercialTerms.updatePoolTerms(userId, offerId, dto);
     return this.getOwn(userId, offerId, activeBrandId);
   }
@@ -352,7 +358,7 @@ export class OffersService {
     if (brand.verificationStatus !== BrandVerificationStatus.VERIFIED) {
       throw new ForbiddenException('Загрузка файлов доступна только подтверждённым брендам');
     }
-    const offer = await this.getOwn(userId, offerId, activeBrandId);
+    const offer = await this.getOwnedOffer(userId, offerId, activeBrandId);
     if (offer.status === OfferStatus.ARCHIVED) {
       throw new BadRequestException('Архивированный оффер нельзя редактировать');
     }
@@ -384,11 +390,29 @@ export class OffersService {
     activeBrandId?: string,
   ) {
     if (!this.storage) throw new BadRequestException('Хранилище изображений недоступно');
-    const offer = await this.getOwn(userId, offerId, activeBrandId);
+    const brand = await this.brands.resolveBrand(userId, activeBrandId);
+    if (brand.verificationStatus !== BrandVerificationStatus.VERIFIED) {
+      throw new ForbiddenException('Загрузка файлов доступна только подтверждённым брендам');
+    }
+    const offer = await this.getOwnedOffer(userId, offerId, activeBrandId);
     const image = await this.prisma.offerImage.findFirst({
       where: { id: uploadId, offerId: offer.id },
     });
     if (!image) throw new NotFoundException('Загрузка изображения не найдена');
+    if (image.status === OfferImageStatus.READY && offer.imageId === image.id) {
+      return this.presentOffer(offer);
+    }
+    if (
+      image.status !== OfferImageStatus.UPLOADING &&
+      image.status !== OfferImageStatus.FAILED
+    ) {
+      throw new BadRequestException('Загрузку нельзя подтвердить в текущем статусе');
+    }
+
+    let completed!: {
+      updated: OfferWithImage;
+      previousImage: { id: string; storageObjectKey: string } | null;
+    };
     try {
       const head = await this.storage.head(image.storageObjectKey);
       if (head.ContentLength === undefined || BigInt(head.ContentLength) !== image.byteSize) {
@@ -398,27 +422,54 @@ export class OffersService {
         throw new Error('MIME загруженного изображения не совпадает');
       }
       this.validateStoredImage(image.originalFileName, image.mimeType, Number(image.byteSize));
-      const updated = await this.prisma.$transaction(async (tx) => {
-        await tx.offerImage.update({
-          where: { id: image.id },
-          data: { status: OfferImageStatus.READY, completedAt: new Date(), deletedAt: null },
-        });
-        const changed = await tx.offer.update({
-          where: { id: offer.id },
-          data: { imageId: image.id, imageUrl: null },
-          include: this.offerInclude,
-        });
-        if (this.commercialTerms) {
-          const version = await this.commercialTerms.createOfferVersion(tx, changed, userId);
-          return tx.offer.update({
+
+      completed = await this.prisma.$transaction(
+        async (tx) => {
+          const current = await tx.offer.findUniqueOrThrow({
+            where: { id: offer.id },
+            include: { image: true },
+          });
+          const previousImage =
+            current.image && current.image.id !== image.id
+              ? {
+                  id: current.image.id,
+                  storageObjectKey: current.image.storageObjectKey,
+                }
+              : null;
+          if (previousImage) {
+            await tx.offerImage.update({
+              where: { id: previousImage.id },
+              data: { status: OfferImageStatus.SUPERSEDED },
+            });
+          }
+          await tx.offerImage.update({
+            where: { id: image.id },
+            data: {
+              status: OfferImageStatus.READY,
+              completedAt: new Date(),
+              deletedAt: null,
+            },
+          });
+          const updated = await tx.offer.update({
+            where: { id: offer.id },
+            data: { imageId: image.id, imageUrl: null },
+            include: this.offerInclude,
+          });
+          if (!this.commercialTerms) return { updated, previousImage };
+          const version = await this.commercialTerms.createOfferVersion(
+            tx,
+            updated,
+            userId,
+          );
+          const versioned = await tx.offer.update({
             where: { id: offer.id },
             data: { currentOfferVersionId: version.id },
             include: this.offerInclude,
           });
-        }
-        return changed;
-      });
-      return this.withManagerIdentity(updated);
+          return { updated: versioned, previousImage };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
     } catch (error) {
       await this.prisma.offerImage.updateMany({
         where: { id: image.id, status: { in: [OfferImageStatus.UPLOADING, OfferImageStatus.FAILED] } },
@@ -426,6 +477,27 @@ export class OffersService {
       });
       throw new BadRequestException(error instanceof Error ? error.message : 'Изображение не прошло проверку');
     }
+
+    await this.audit.record({
+      actorUserId: userId,
+      action: 'OFFER_IMAGE_UPLOADED',
+      entityType: 'Offer',
+      entityId: offer.id,
+      metadata: {
+        uploadId: image.id,
+        mimeType: image.mimeType,
+        byteSize: image.byteSize.toString(),
+        replacedImage: Boolean(completed.previousImage),
+      },
+    });
+
+    if (completed.previousImage) {
+      await this.deleteSupersededImage(
+        completed.previousImage.id,
+        completed.previousImage.storageObjectKey,
+      );
+    }
+    return this.presentOffer(completed.updated);
   }
 
   async listPublished() {
@@ -434,7 +506,7 @@ export class OffersService {
       include: this.offerInclude,
       orderBy: { createdAt: 'desc' },
     });
-    return offers.map((offer) => this.withManagerIdentity(offer));
+    return Promise.all(offers.map((offer) => this.presentOffer(offer, 'creator')));
   }
 
   async listPublicPublished() {
@@ -473,41 +545,29 @@ export class OffersService {
       include: this.offerInclude,
     });
     if (!offer) throw new NotFoundException('Опубликованный оффер не найден');
-    return this.withManagerIdentity(offer);
+    return this.presentOffer(offer, 'creator');
   }
 
-  private withManagerIdentity<
-    T extends {
-      currentManager?: {
-        id: string;
-        managerProfile: { displayName: string } | null;
-      } | null;
-      currentVersion?: { version: number } | null;
-      currentCommercialTerms?: {
-        version: number;
-        calculationPolicy: string;
-        totalCommissionPoolBps: number;
-        creatorPoolShareBps: number;
-        platformPoolShareBps: number;
-        creatorEffectiveGmvBps: number;
-        platformEffectiveGmvBps: number;
-        currency: string;
-      } | null;
-      platformCommissionBps: number;
-      creatorCommissionBps: number;
-    },
-  >(offer: T) {
+  private async presentOffer(
+    offer: OfferWithImage,
+    audience: 'brand' | 'creator' = 'brand',
+  ) {
     const {
+      image,
       currentManager,
       currentVersion,
       currentCommercialTerms,
       platformCommissionBps: legacyPlatformCommissionBps,
       ...rest
     } = offer;
+    const imageUrl =
+      image?.status === OfferImageStatus.READY && this.storage
+        ? await this.storage.createViewUrl(image.storageObjectKey, image.mimeType)
+        : rest.imageUrl;
     const creatorEffectiveBps =
       currentCommercialTerms?.creatorEffectiveGmvBps ??
       rest.creatorCommissionBps;
-    return {
+    const common = {
       ...rest,
       creatorCommissionBps: creatorEffectiveBps,
       creatorEffectiveBps,
@@ -516,12 +576,17 @@ export class OffersService {
       calculationPolicy:
         currentCommercialTerms?.calculationPolicy ?? 'LEGACY_DIRECT_RATES_V1',
       currency: currentCommercialTerms?.currency ?? 'RUB',
+      imageUrl,
       currentManager: currentManager
         ? {
             id: currentManager.id,
             displayName: currentManager.managerProfile?.displayName ?? null,
           }
         : null,
+    };
+    if (audience === 'creator') return common;
+    return {
+      ...common,
       totalCommissionPoolBps:
         currentCommercialTerms?.totalCommissionPoolBps ??
         rest.creatorCommissionBps + legacyPlatformCommissionBps,
@@ -531,6 +596,17 @@ export class OffersService {
         currentCommercialTerms?.platformEffectiveGmvBps ??
         legacyPlatformCommissionBps,
     };
+  }
+
+  private async getOwnedOffer(userId: string, offerId: string, activeBrandId?: string) {
+    const brand = await this.brands.resolveBrand(userId, activeBrandId);
+    const offer = await this.prisma.offer.findUnique({
+      where: { id: offerId },
+      include: this.offerInclude,
+    });
+    if (!offer) throw new NotFoundException('Оффер не найден');
+    if (offer.brandId !== brand.id) throw new ForbiddenException('Нет доступа к этому офферу');
+    return offer;
   }
 
   private validateCustomerDiscount(input: {
@@ -583,5 +659,20 @@ export class OffersService {
   private publicImage<T extends { storageObjectKey: string }>(image: T) {
     const { storageObjectKey: _storageObjectKey, ...safe } = image;
     return safe;
+  }
+
+  private async deleteSupersededImage(imageId: string, objectKey: string) {
+    try {
+      await this.storage!.delete(objectKey);
+      await this.prisma.offerImage.updateMany({
+        where: { id: imageId, status: OfferImageStatus.SUPERSEDED },
+        data: { status: OfferImageStatus.DELETED, deletedAt: new Date() },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to delete superseded offer image ${imageId}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
   }
 }

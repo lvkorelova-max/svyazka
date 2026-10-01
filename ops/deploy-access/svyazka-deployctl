@@ -1,0 +1,324 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+readonly releases_root="/opt/svyazka/releases"
+readonly deploy_root="/opt/svyazka/deploy"
+readonly incoming_root="/var/lib/svyazka-deploy/incoming"
+readonly current_link="/opt/svyazka/current"
+readonly max_archive_bytes=$((512 * 1024 * 1024))
+
+fail() {
+  printf 'ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+require_root() {
+  [[ "$EUID" -eq 0 ]] || fail "root execution required"
+}
+
+valid_release_name() {
+  [[ "$1" =~ ^[a-z0-9][a-z0-9._-]{0,95}$ ]]
+}
+
+valid_archive_name() {
+  [[ "$1" =~ ^svyazka-[a-zA-Z0-9._-]{1,120}\.tar\.gz$ ]]
+}
+
+valid_sha256() {
+  [[ "$1" =~ ^[a-f0-9]{64}$ ]]
+}
+
+valid_commit_sha() {
+  [[ "$1" =~ ^[a-f0-9]{40}$ ]]
+}
+
+release_path() {
+  local name="$1"
+  valid_release_name "$name" || fail "invalid release name"
+  printf '%s/%s\n' "$releases_root" "$name"
+}
+
+archive_path() {
+  local name="$1"
+  valid_archive_name "$name" || fail "invalid archive name"
+  printf '%s/%s\n' "$incoming_root" "$name"
+}
+
+require_release() {
+  local path
+  path="$(release_path "$1")"
+  [[ -d "$path" ]] || fail "release does not exist"
+  [[ -f "$path/COMMIT_SHA" ]] || fail "release COMMIT_SHA is missing"
+  printf '%s\n' "$path"
+}
+
+compose_for() {
+  local release="$1"
+  COMPOSE=(
+    /usr/bin/docker compose
+    --env-file "$release/.env.production"
+    -f "$release/docker-compose.prod.yml"
+    -f "$deploy_root/docker-compose.amd64.yml"
+    -f "$deploy_root/docker-compose.backup.yml"
+  )
+}
+
+validate_services() {
+  [[ "$#" -gt 0 ]] || fail "at least one service is required"
+  local service
+  for service in "$@"; do
+    case "$service" in
+      migration|backend|frontend|caddy|backup-service) ;;
+      *) fail "service is not allowed: $service" ;;
+    esac
+  done
+}
+
+preflight() {
+  printf 'ACTIVE_RELEASE='
+  readlink -f "$current_link"
+  printf 'ACTIVE_COMMIT='
+  cat "$current_link/COMMIT_SHA"
+  printf 'DISK_FREE_KB='
+  df -Pk /opt/svyazka | awk 'NR == 2 { print $4 }'
+  printf 'LIVE='
+  /usr/bin/curl -fsS https://svyazka.pro/health/live
+  printf '\nREADY='
+  /usr/bin/curl -fsS https://svyazka.pro/health/ready
+  printf '\nFEATURE_FLAGS='
+  awk -F= '
+    /^(STAGE7_FINANCE_ENABLED|STAGE7_FINANCIAL_ACTIVATION_ENABLED)=/ {
+      print $1 "=" ($2 == "false" ? "false" : "NOT_FALSE")
+    }
+  ' "$current_link/.env.production" | sort | tr '\n' ' '
+  printf '\nCONTAINERS\n'
+  /usr/bin/docker ps \
+    --filter name=svyazka-production \
+    --format '{{.Names}}|{{.Status}}'
+}
+
+access_audit() {
+  printf 'DEPLOY_ID='
+  id deploy
+  printf 'SUDO_GROUP='
+  if id -nG deploy | tr ' ' '\n' | grep -qx sudo; then
+    printf 'PRESENT\n'
+  else
+    printf 'ABSENT\n'
+  fi
+  printf 'DOCKER_GROUP='
+  if id -nG deploy | tr ' ' '\n' | grep -qx docker; then
+    printf 'PRESENT\n'
+  else
+    printf 'ABSENT\n'
+  fi
+  printf 'SSHD_EFFECTIVE\n'
+  /usr/sbin/sshd -T -C user=deploy,host=svyazka.pro,addr=127.0.0.1 |
+    grep -E \
+      '^(permitrootlogin|pubkeyauthentication|passwordauthentication|kbdinteractiveauthentication|x11forwarding|disableforwarding|permittty|permittunnel|authenticationmethods) '
+  printf 'SUDO_POLICY\n'
+  /usr/bin/sudo -n -l -U deploy
+  printf 'AUTHORIZED_KEYS\n'
+  awk '
+    NF && $1 !~ /^#/ {
+      keytype = ($1 ~ /^(ssh-|ecdsa-)/ ? $1 : $2)
+      comment = $NF
+      options = ($1 ~ /^(ssh-|ecdsa-)/ ? "none" : $1)
+      print "options=" options " type=" keytype " comment=" comment
+    }
+  ' /home/deploy/.ssh/authorized_keys
+}
+
+backup() {
+  /usr/bin/docker exec svyazka-production-backup-service-1 \
+    /opt/backup/backup-all
+  /usr/bin/docker exec svyazka-production-backup-service-1 \
+    restic check --read-data-subset=1/100
+}
+
+upload() {
+  local name="$1"
+  local expected_sha="$2"
+  local destination temporary size actual_sha
+  valid_sha256 "$expected_sha" || fail "invalid archive SHA-256"
+  destination="$(archive_path "$name")"
+  temporary="$(mktemp "$incoming_root/.upload.XXXXXX")"
+  trap 'rm -f "$temporary"' RETURN
+
+  /bin/dd of="$temporary" bs=1M count=513 iflag=fullblock status=none
+  size="$(stat -c '%s' "$temporary")"
+  [[ "$size" -le "$max_archive_bytes" ]] || fail "archive exceeds 512 MiB"
+  actual_sha="$(sha256sum "$temporary" | awk '{ print $1 }')"
+  [[ "$actual_sha" == "$expected_sha" ]] || fail "archive checksum mismatch"
+  install -m 600 -o root -g root "$temporary" "$destination"
+  rm -f "$temporary"
+  trap - RETURN
+  printf 'UPLOAD_OK=%s\n' "$destination"
+}
+
+prepare() {
+  local release_name="$1"
+  local archive_name="$2"
+  local commit_sha="$3"
+  local expected_sha="$4"
+  local release archive actual_sha
+
+  valid_commit_sha "$commit_sha" || fail "invalid commit SHA"
+  valid_sha256 "$expected_sha" || fail "invalid archive SHA-256"
+  release="$(release_path "$release_name")"
+  archive="$(archive_path "$archive_name")"
+  [[ ! -e "$release" ]] || fail "release already exists"
+  [[ -f "$archive" ]] || fail "uploaded archive is missing"
+  actual_sha="$(sha256sum "$archive" | awk '{ print $1 }')"
+  [[ "$actual_sha" == "$expected_sha" ]] || fail "archive checksum mismatch"
+
+  if tar -tzf "$archive" | awk '
+    /^\// { exit 1 }
+    {
+      count = split($0, parts, "/")
+      for (i = 1; i <= count; i++) {
+        if (parts[i] == "..") exit 1
+      }
+    }
+  '; then
+    :
+  else
+    fail "archive contains an unsafe path"
+  fi
+  if tar -tvzf "$archive" | awk '$1 ~ /^[lh]/ { exit 1 }'; then
+    :
+  else
+    fail "archive contains links"
+  fi
+
+  install -d -m 755 -o root -g root "$release"
+  tar --no-same-owner --no-same-permissions -xzf "$archive" -C "$release"
+  chown -R root:root "$release"
+  install -m 600 -o root -g root \
+    "$current_link/.env.production" \
+    "$release/.env.production"
+  printf '%s\n' "$commit_sha" > "$release/COMMIT_SHA"
+  chmod 644 "$release/COMMIT_SHA"
+  printf 'PREPARE_OK=%s\n' "$release"
+}
+
+validate_release() {
+  local release
+  release="$(require_release "$1")"
+  compose_for "$release"
+  "${COMPOSE[@]}" config -q
+  printf '%s\n' "$(date -u +%FT%TZ)" > "$release/.deploy-config-ok"
+  printf 'CONFIG_OK=%s\n' "$release"
+}
+
+build_release() {
+  local release_name="$1"
+  shift
+  local release
+  validate_services "$@"
+  release="$(require_release "$release_name")"
+  [[ -f "$release/.deploy-config-ok" ]] || fail "compose validation marker is missing"
+  compose_for "$release"
+  "${COMPOSE[@]}" build "$@"
+  printf '%s\n' "$(date -u +%FT%TZ)" > "$release/.deploy-build-ok"
+  printf 'BUILD_OK=%s\n' "$release"
+}
+
+migrate_release() {
+  local release
+  release="$(require_release "$1")"
+  [[ -f "$release/.deploy-config-ok" ]] || fail "compose validation marker is missing"
+  compose_for "$release"
+  "${COMPOSE[@]}" run --rm migration
+  printf '%s\n' "$(date -u +%FT%TZ)" > "$release/.deploy-migration-ok"
+  printf 'MIGRATION_OK=%s\n' "$release"
+}
+
+preserve_image() {
+  local service="$1"
+  local tag="$2"
+  local container image
+  validate_services "$service"
+  [[ "$service" != "migration" ]] || fail "migration has no persistent container"
+  [[ "$tag" =~ ^rollback-[a-f0-9]{7,40}$ ]] || fail "invalid rollback tag"
+  container="svyazka-production-${service}-1"
+  image="$(/usr/bin/docker inspect "$container" --format '{{.Image}}')"
+  /usr/bin/docker tag "$image" "svyazka-production-${service}:${tag}"
+  /usr/bin/docker image inspect "svyazka-production-${service}:${tag}" >/dev/null
+  printf 'IMAGE_PRESERVED=%s:%s\n' "$service" "$tag"
+}
+
+activate_release() {
+  local release_name="$1"
+  shift
+  local release
+  validate_services "$@"
+  release="$(require_release "$release_name")"
+  [[ -f "$release/.deploy-config-ok" ]] || fail "compose validation marker is missing"
+  [[ -f "$release/.deploy-migration-ok" ]] || fail "migration marker is missing"
+  [[ -f "$release/.deploy-build-ok" ]] || fail "build marker is missing"
+  ln -sfnT "$release" "$current_link"
+  compose_for "$release"
+  "${COMPOSE[@]}" up -d --no-deps --force-recreate "$@"
+  printf 'ACTIVATE_OK=%s\n' "$release"
+}
+
+show_logs() {
+  local service="$1"
+  local since="${2:-10m}"
+  validate_services "$service"
+  [[ "$service" != "migration" ]] || fail "migration has no persistent container"
+  [[ "$since" =~ ^[0-9]{1,4}[smhd]$ ]] || fail "invalid log window"
+  /usr/bin/docker logs --since "$since" "svyazka-production-${service}-1"
+}
+
+cleanup_upload() {
+  local archive
+  archive="$(archive_path "$1")"
+  [[ -f "$archive" ]] || fail "uploaded archive is missing"
+  rm -f "$archive"
+  printf 'UPLOAD_REMOVED=%s\n' "$archive"
+}
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  svyazka-deployctl preflight
+  svyazka-deployctl access-audit
+  svyazka-deployctl backup
+  svyazka-deployctl upload ARCHIVE_NAME SHA256
+  svyazka-deployctl prepare RELEASE ARCHIVE_NAME COMMIT_SHA SHA256
+  svyazka-deployctl validate RELEASE
+  svyazka-deployctl build RELEASE SERVICE...
+  svyazka-deployctl migrate RELEASE
+  svyazka-deployctl preserve-image SERVICE rollback-SHA
+  svyazka-deployctl activate RELEASE SERVICE...
+  svyazka-deployctl logs SERVICE [10m]
+  svyazka-deployctl cleanup-upload ARCHIVE_NAME
+EOF
+  exit 2
+}
+
+require_root
+install -d -m 700 -o root -g root "$incoming_root"
+
+command="${1:-}"
+[[ -n "$command" ]] || usage
+shift
+/usr/bin/logger -t svyazka-deployctl -- "command=$command"
+
+case "$command" in
+  preflight) [[ "$#" -eq 0 ]] || usage; preflight ;;
+  access-audit) [[ "$#" -eq 0 ]] || usage; access_audit ;;
+  backup) [[ "$#" -eq 0 ]] || usage; backup ;;
+  upload) [[ "$#" -eq 2 ]] || usage; upload "$@" ;;
+  prepare) [[ "$#" -eq 4 ]] || usage; prepare "$@" ;;
+  validate) [[ "$#" -eq 1 ]] || usage; validate_release "$@" ;;
+  build) [[ "$#" -ge 2 ]] || usage; build_release "$@" ;;
+  migrate) [[ "$#" -eq 1 ]] || usage; migrate_release "$@" ;;
+  preserve-image) [[ "$#" -eq 2 ]] || usage; preserve_image "$@" ;;
+  activate) [[ "$#" -ge 2 ]] || usage; activate_release "$@" ;;
+  logs) [[ "$#" -ge 1 && "$#" -le 2 ]] || usage; show_logs "$@" ;;
+  cleanup-upload) [[ "$#" -eq 1 ]] || usage; cleanup_upload "$@" ;;
+  *) usage ;;
+esac

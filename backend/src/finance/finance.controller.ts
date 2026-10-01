@@ -157,6 +157,12 @@ export class FinanceController {
     return this.finance.getBrandFinanceOverview(user.id, query);
   }
 
+  @Get('brand/statements')
+  @Roles(UserRole.BRAND)
+  listBrandStatements(@CurrentUser() user: AuthenticatedUser) {
+    return this.finance.listBrandStatements(user.id);
+  }
+
   @Get('brand/analytics/creators')
   @Roles(UserRole.BRAND, UserRole.MANAGER)
   getCreatorAnalytics(
@@ -251,6 +257,27 @@ export class FinanceController {
   @Roles(UserRole.CREATOR)
   getCreatorEarningsSummary(@CurrentUser() user: AuthenticatedUser) {
     return this.finance.getCreatorEarningsSummary(user.id);
+  }
+
+  @Get('creator/payouts')
+  @Roles(UserRole.CREATOR)
+  listCreatorPayouts(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: ListFinanceQueryDto,
+  ) {
+    return this.finance.listCreatorPayouts(user.id, query);
+  }
+
+  @Get('admin/finance/overview')
+  @Roles(UserRole.ADMIN)
+  getAdminFinanceOverview() {
+    return this.finance.getAdminFinanceOverview();
+  }
+
+  @Get('admin/statements')
+  @Roles(UserRole.ADMIN)
+  listAdminStatements() {
+    return this.finance.listAdminStatements();
   }
 
   @Get('admin/commissions')
