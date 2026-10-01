@@ -41,6 +41,7 @@ jobs:
       MFA_RECOVERY_CODE_SALT: test_only_recovery_code_salt_at_least_32_chars
       S3_ENDPOINT_INTERNAL: http://127.0.0.1:9000
       S3_ENDPOINT_PUBLIC: http://localhost:9000
+      S3_TEST_ENDPOINT_PUBLIC: http://localhost:9000
       S3_REGION: us-east-1
       S3_ACCESS_KEY: svyazka_minio
       S3_SECRET_KEY: local_minio_secret_change_me
