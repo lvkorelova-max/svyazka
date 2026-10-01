@@ -1,0 +1,153 @@
+name: Backend CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://svyazka:local_test_password@127.0.0.1:5432/svyazka_test?schema=public
+      TEST_DATABASE_URL: postgresql://svyazka:local_test_password@127.0.0.1:5432/svyazka_test?schema=public
+      JWT_ACCESS_SECRET: test_only_access_secret_at_least_32_chars
+      FRONTEND_ORIGIN: http://localhost:5173
+      COOKIE_SECURE: "false"
+      COOKIE_SAME_SITE: lax
+      REFRESH_COOKIE_NAME: svyazka_refresh_test
+      PLATFORM_COMMISSION_BPS: "500"
+      STAGE7_FINANCE_ENABLED: "true"
+      STAGE7_FINANCIAL_ACTIVATION_ENABLED: "true"
+      CREATOR_MINIMUM_PAYOUT_MINOR: "0"
+      STAGE8_WEBHOOK_SECRET_ENCRYPTION_KEY: test_only_stage8_webhook_encryption_key_32_chars
+      PUBLIC_BACKEND_URL: http://localhost:3000
+      CLICK_IP_HASH_SALT: test_only_click_ip_salt_at_least_32_chars
+      CLICK_RATE_LIMIT_PER_MINUTE: "60"
+      CLICK_DEDUPE_WINDOW_SECONDS: "5"
+      COMMISSION_HOLD_DAYS: "14"
+      ADMIN_MFA_REQUIRED: "false"
+      PASSWORD_RESET_EXPOSE_TOKEN: "true"
+      MFA_ENCRYPTION_KEY: test_only_mfa_encryption_key_at_least_32_chars
+      MFA_RECOVERY_CODE_SALT: test_only_recovery_code_salt_at_least_32_chars
+      S3_ENDPOINT_INTERNAL: http://127.0.0.1:9000
+      S3_ENDPOINT_PUBLIC: http://127.0.0.1:9000
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY: svyazka_minio
+      S3_SECRET_KEY: local_minio_secret_change_me
+      S3_BUCKET: creator-kit
+      S3_UPLOAD_URL_TTL_SECONDS: "600"
+      S3_DOWNLOAD_URL_TTL_SECONDS: "300"
+      CREATOR_KIT_MAX_ASSETS: "100"
+      CREATOR_KIT_MAX_IMAGE_BYTES: "26214400"
+      CREATOR_KIT_MAX_VIDEO_BYTES: "524288000"
+      CREATOR_KIT_MAX_DOCUMENT_BYTES: "26214400"
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: svyazka
+          POSTGRES_USER: svyazka
+          POSTGRES_PASSWORD: local_test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U svyazka -d svyazka"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+        volumes:
+          - ${{ github.workspace }}/backend/docker/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
+      minio:
+        image: minio/minio:latest
+        env:
+          MINIO_ROOT_USER: svyazka_minio
+          MINIO_ROOT_PASSWORD: local_minio_secret_change_me
+          MINIO_API_CORS_ALLOW_ORIGIN: http://localhost:5173
+        ports:
+          - 9000:9000
+          - 9001:9001
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Wait for PostgreSQL
+        run: |
+          for attempt in $(seq 1 30); do
+            if docker run --rm --network host postgres:17-alpine \
+              pg_isready -h 127.0.0.1 -p 5432 -U svyazka -d svyazka_test; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "PostgreSQL did not become ready"
+          exit 1
+
+      - name: Wait for MinIO
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:9000/minio/health/live >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "MinIO did not become ready"
+          exit 1
+
+      - name: Create test bucket
+        run: |
+          docker run --rm --network host --entrypoint /bin/sh minio/mc:latest -c \
+            'mc alias set local http://127.0.0.1:9000 "$S3_ACCESS_KEY" "$S3_SECRET_KEY" &&
+             mc mb --ignore-existing "local/$S3_BUCKET" &&
+             mc anonymous set none "local/$S3_BUCKET"'
+        env:
+          S3_ACCESS_KEY: svyazka_minio
+          S3_SECRET_KEY: local_minio_secret_change_me
+          S3_BUCKET: creator-kit
+
+      - name: Generate Prisma client
+        run: npm run prisma:generate -w backend
+
+      - name: Apply Prisma migrations
+        run: npm run prisma:migrate -w backend
+
+      - name: Run unit tests
+        run: npm test -w backend -- --runInBand
+
+      - name: Build backend
+        run: npm run build -w backend
+
+      - name: Run full backend E2E
+        run: npm run test:e2e -w backend
+
+      - name: Check diff whitespace
+        run: git diff --check
+
+      - name: Dump service diagnostics
+        if: failure()
+        run: |
+          docker ps -a
+          for container in $(docker ps -aq); do
+            echo "===== docker logs $container ====="
+            docker logs "$container" 2>&1 || true
+          done
