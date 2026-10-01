@@ -10,9 +10,16 @@ import { BigIntSerializerInterceptor } from './common/interceptors/bigint-serial
 import { JsonLogger } from './common/json-logger';
 import { RequestContext } from './common/request-context';
 import { randomUUID } from 'crypto';
+import { applyTrackerScriptHeaders } from './tracker-script-headers';
+import { PrismaService } from './prisma/prisma.service';
+import { Stage8IntegrationStatus } from '@prisma/client';
+import { trackerOriginMatches } from './tracker-origin';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { logger: new JsonLogger() });
+  const app = await NestFactory.create(AppModule, {
+    logger: new JsonLogger(),
+    rawBody: true,
+  });
   const config = app.get(ConfigService);
   const trustProxy = config.get<string>('TRUST_PROXY');
   if (trustProxy) {
@@ -31,6 +38,9 @@ async function bootstrap() {
       { path: 'go/:affiliateCode', method: RequestMethod.GET },
       { path: 'health/live', method: RequestMethod.GET },
       { path: 'health/ready', method: RequestMethod.GET },
+      { path: 'track/v1.js', method: RequestMethod.GET },
+      { path: 'track/v1/events', method: RequestMethod.POST },
+      { path: 'track/v1/events', method: RequestMethod.OPTIONS },
     ],
   });
   app.use((request: Request, response: Response, next: NextFunction) => {
@@ -58,7 +68,49 @@ async function bootstrap() {
     });
   });
   app.use(helmet());
+  app.use((request: Request, response: Response, next: NextFunction) => {
+    applyTrackerScriptHeaders(request, response);
+    next();
+  });
   app.use(cookieParser());
+  const prisma = app.get(PrismaService);
+  app.use(async (request: Request, response: Response, next: NextFunction) => {
+    if (request.path !== '/track/v1/events') {
+      next();
+      return;
+    }
+    const origin = request.header('origin');
+    if (!origin) {
+      next();
+      return;
+    }
+    const installations = await prisma.trackerInstallation.findMany({
+      where: { status: Stage8IntegrationStatus.ACTIVE },
+      select: { primaryDomain: true, allowedOrigins: true },
+    });
+    const allowed = installations.some((installation) =>
+      [installation.primaryDomain, ...installation.allowedOrigins].some((configured) =>
+        trackerOriginMatches(origin, configured),
+      ),
+    );
+    if (!allowed) {
+      response.status(403).json({ message: 'Tracker origin is not allowed' });
+      return;
+    }
+    response.setHeader('Access-Control-Allow-Origin', origin);
+    response.setHeader('Access-Control-Allow-Credentials', 'true');
+    response.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    response.setHeader(
+      'Access-Control-Allow-Headers',
+      'Content-Type, X-Requested-With',
+    );
+    response.setHeader('Vary', 'Origin');
+    if (request.method === 'OPTIONS') {
+      response.status(204).send();
+      return;
+    }
+    next();
+  });
   app.enableCors({
     origin: config.getOrThrow<string>('FRONTEND_ORIGIN'),
     credentials: true,

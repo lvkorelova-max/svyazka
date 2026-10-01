@@ -14,6 +14,9 @@ import { HealthModule } from './health/health.module';
 import { BrandAccessModule } from './brand-access/brand-access.module';
 import { ManagerModule } from './manager/manager.module';
 import { ManagerInvitationModule } from './manager-invitation/manager-invitation.module';
+import { AttributionModule } from './attribution/attribution.module';
+import { CommercialTermsModule } from './commercial-terms/commercial-terms.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -44,6 +47,23 @@ import { ManagerInvitationModule } from './manager-invitation/manager-invitation
           if (String(config.ADMIN_MFA_REQUIRED) !== 'true') {
             throw new Error('ADMIN_MFA_REQUIRED must be true in production');
           }
+          const stage8Enabled = [
+            'STAGE8_TRACKER_ENABLED',
+            'STAGE8_TILDA_ENABLED',
+            'STAGE8_ORDER_INGESTION_ENABLED',
+            'STAGE8_ATTRIBUTION_SHADOW_ENABLED',
+            'STAGE8_AUTO_ATTRIBUTION_ENABLED',
+            'STAGE8_FINANCE_HANDOFF_ENABLED',
+          ].some((key) => String(config[key]) === 'true');
+          if (
+            stage8Enabled &&
+            (!config.STAGE8_WEBHOOK_SECRET_ENCRYPTION_KEY ||
+              String(config.STAGE8_WEBHOOK_SECRET_ENCRYPTION_KEY).length < 32)
+          ) {
+            throw new Error(
+              'STAGE8_WEBHOOK_SECRET_ENCRYPTION_KEY must contain at least 32 characters when Stage 8 is enabled',
+            );
+          }
         }
         return config;
       },
@@ -53,6 +73,8 @@ import { ManagerInvitationModule } from './manager-invitation/manager-invitation
     SecurityModule,
     StorageModule,
     HealthModule,
+    CommercialTermsModule,
+    NotificationsModule,
     BrandAccessModule,
     AuthModule,
     ManagerModule,
@@ -62,6 +84,7 @@ import { ManagerInvitationModule } from './manager-invitation/manager-invitation
     OffersModule,
     PartnershipsModule,
     FinanceModule,
+    AttributionModule,
   ],
 })
 export class AppModule {}

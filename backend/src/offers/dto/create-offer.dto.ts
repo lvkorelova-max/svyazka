@@ -1,4 +1,4 @@
-import { PromotionWithoutProduct } from '@prisma/client';
+import { CustomerDiscountType, PromotionWithoutProduct } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -38,7 +38,33 @@ export class CreateOfferDto {
   @IsInt()
   @Min(0)
   @Max(10_000)
-  creatorCommissionBps: number;
+  @IsOptional()
+  creatorCommissionBps?: number;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(10_000)
+  @IsOptional()
+  totalCommissionPoolBps?: number;
+
+  @IsOptional()
+  @IsEnum(CustomerDiscountType)
+  customerDiscountType?: CustomerDiscountType;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(10_000)
+  @IsOptional()
+  customerDiscountBps?: number;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(2_147_483_647)
+  @IsOptional()
+  customerDiscountAmountMinor?: number;
 
   @IsEnum(PromotionWithoutProduct)
   promotionWithoutProduct: PromotionWithoutProduct;

@@ -28,6 +28,14 @@ import {
 } from './dto/list-finance-query.dto';
 import { FinanceService } from './finance.service';
 import { Body } from '@nestjs/common';
+import { AttributionService } from '../attribution/attribution.service';
+import { Stage8FlagsService } from '../attribution/stage8-flags.service';
+import {
+  IssueBrandStatementDto,
+  OpenFinancialDisputeDto,
+  RecordBrandPaymentDto,
+  ResolveFinancialDisputeDto,
+} from './dto/settlement.dto';
 
 type CsvUpload = {
   buffer: Buffer;
@@ -41,6 +49,8 @@ type CsvUpload = {
 export class FinanceController {
   constructor(
     private readonly finance: FinanceService,
+    private readonly attribution: AttributionService,
+    private readonly stage8Flags: Stage8FlagsService,
     config: ConfigService,
   ) {
     this.maxUploadBytes = Number(config.get<string>('ORDER_IMPORT_MAX_BYTES') ?? 10_485_760);
@@ -76,12 +86,26 @@ export class FinanceController {
 
   @Post('brand/order-imports/:id/confirm')
   @Roles(UserRole.BRAND, UserRole.MANAGER)
-  confirmOrderImport(
+  async confirmOrderImport(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
     @ActiveBrandId() brandId?: string,
   ) {
-    return this.finance.confirmOrderImport(user.id, id, brandId);
+    if (
+      user.role === UserRole.BRAND &&
+      this.stage8Flags.ingestionEnabled() &&
+      this.stage8Flags.autoAttributionEnabled()
+    ) {
+      return this.attribution.ingestConfirmedCsvImport(user.id, id);
+    }
+    const result = await this.finance.confirmOrderImport(user.id, id, brandId);
+    if (
+      user.role === UserRole.BRAND &&
+      this.stage8Flags.shadowEnabled()
+    ) {
+      await this.attribution.mirrorConfirmedCsvImport(user.id, id);
+    }
+    return result;
   }
 
   @Get('brand/orders')
@@ -124,6 +148,15 @@ export class FinanceController {
     return this.finance.getBrandAnalytics(user.id, query, brandId);
   }
 
+  @Get('brand/finance/overview')
+  @Roles(UserRole.BRAND)
+  getBrandFinanceOverview(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: ListFinanceQueryDto,
+  ) {
+    return this.finance.getBrandFinanceOverview(user.id, query);
+  }
+
   @Get('brand/analytics/creators')
   @Roles(UserRole.BRAND, UserRole.MANAGER)
   getCreatorAnalytics(
@@ -132,6 +165,59 @@ export class FinanceController {
     @ActiveBrandId() brandId?: string,
   ) {
     return this.finance.getCreatorAnalytics(user.id, query, brandId);
+  }
+
+  @Post('brand/disputes')
+  @Roles(UserRole.BRAND)
+  openDispute(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: OpenFinancialDisputeDto,
+  ) {
+    return this.finance.openDispute(user.id, dto);
+  }
+
+  @Post('admin/statements')
+  @Roles(UserRole.ADMIN)
+  @UseGuards(AdminSecurityGuard)
+  issueBrandStatement(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: IssueBrandStatementDto,
+  ) {
+    return this.finance.issueBrandStatement(user.id, dto);
+  }
+
+  @Post('admin/brand-payments')
+  @Roles(UserRole.ADMIN)
+  @UseGuards(AdminSecurityGuard)
+  recordBrandPayment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: RecordBrandPaymentDto,
+  ) {
+    return this.finance.recordBrandPayment(user.id, dto);
+  }
+
+  @Get('admin/brand-payments')
+  @Roles(UserRole.ADMIN)
+  listBrandPayments() {
+    return this.finance.listAdminBrandPayments();
+  }
+
+  @Post('admin/disputes/:id/resolve')
+  @Roles(UserRole.ADMIN)
+  @UseGuards(AdminSecurityGuard)
+  resolveDispute(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ResolveFinancialDisputeDto,
+  ) {
+    return this.finance.resolveDispute(user.id, id, dto);
+  }
+
+  @Post('admin/reconciliation/run')
+  @Roles(UserRole.ADMIN)
+  @UseGuards(AdminSecurityGuard)
+  runReconciliation(@CurrentUser() user: AuthenticatedUser) {
+    return this.finance.runReconciliation(user.id);
   }
 
   @Get('creator/clicks')
@@ -177,6 +263,12 @@ export class FinanceController {
   @Roles(UserRole.ADMIN)
   listLedgerEntries(@Query() query: ListFinanceQueryDto) {
     return this.finance.listLedgerEntries(query);
+  }
+
+  @Get('admin/ledger-transactions')
+  @Roles(UserRole.ADMIN)
+  listLedgerTransactions(@Query() query: ListFinanceQueryDto) {
+    return this.finance.listLedgerTransactions(query);
   }
 
   @Get('admin/payouts')

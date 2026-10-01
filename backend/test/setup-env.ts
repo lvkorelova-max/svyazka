@@ -20,6 +20,12 @@ process.env.COOKIE_SECURE = 'false';
 process.env.COOKIE_SAME_SITE = 'lax';
 process.env.REFRESH_COOKIE_NAME = 'svyazka_refresh_test';
 process.env.PLATFORM_COMMISSION_BPS = '500';
+process.env.STAGE7_FINANCE_ENABLED = 'true';
+process.env.STAGE7_FINANCIAL_ACTIVATION_ENABLED = 'true';
+process.env.CREATOR_MINIMUM_PAYOUT_MINOR = '0';
+process.env.STAGE8_WEBHOOK_SECRET_ENCRYPTION_KEY =
+  process.env.STAGE8_WEBHOOK_SECRET_ENCRYPTION_KEY ??
+  'test_only_stage8_webhook_encryption_key_32_chars';
 process.env.PUBLIC_BACKEND_URL = 'http://localhost:3000';
 process.env.CLICK_IP_HASH_SALT = 'test_only_click_ip_salt_at_least_32_chars';
 process.env.CLICK_RATE_LIMIT_PER_MINUTE = '60';

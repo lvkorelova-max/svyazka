@@ -23,7 +23,12 @@ import { BrandContextGuard } from '../brand-access/brand-context.guard';
 import { ActiveBrandId } from '../brand-access/brand-context';
 import { UpdateResponsibilityDto } from '../manager/dto/update-responsibility.dto';
 import { CreateApplicationDto } from './dto/create-application.dto';
+import {
+  AcceptApplicationTermsDto,
+  ApproveApplicationDto,
+} from './dto/application-terms.dto';
 import { ListRelationshipsQueryDto } from './dto/list-relationships-query.dto';
+import { ReplacePromoCodeDto } from './dto/replace-promo-code.dto';
 import { PartnershipsService } from './partnerships.service';
 
 @Controller()
@@ -63,6 +68,34 @@ export class PartnershipsController {
     @Param('id', ParseUUIDPipe) applicationId: string,
   ) {
     return this.partnerships.cancelApplication(user.id, applicationId);
+  }
+
+  @Get('creator/applications/:id/terms')
+  @Roles(UserRole.CREATOR)
+  getApplicationTerms(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) applicationId: string,
+  ) {
+    return this.partnerships.getApplicationTerms(user.id, applicationId);
+  }
+
+  @Post('creator/applications/:id/accept-terms')
+  @Roles(UserRole.CREATOR)
+  acceptApplicationTerms(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) applicationId: string,
+    @Body() dto: AcceptApplicationTermsDto,
+  ) {
+    return this.partnerships.acceptApplicationTerms(user.id, applicationId, dto);
+  }
+
+  @Post('creator/applications/:id/withdraw')
+  @Roles(UserRole.CREATOR)
+  withdrawApplication(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) applicationId: string,
+  ) {
+    return this.partnerships.withdrawApplication(user.id, applicationId);
   }
 
   @Get('creator/affiliate-relationships')
@@ -106,8 +139,9 @@ export class PartnershipsController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) applicationId: string,
     @ActiveBrandId() brandId: string,
+    @Body() dto: ApproveApplicationDto,
   ) {
-    return this.partnerships.approveApplication(user.id, applicationId, brandId);
+    return this.partnerships.approveApplication(user.id, applicationId, brandId, dto);
   }
 
   @Post('brand/applications/:id/reject')
@@ -174,6 +208,27 @@ export class PartnershipsController {
       brandId,
       dto.managerId ?? null,
     );
+  }
+
+  @Patch('brand/affiliate-relationships/:id/promo-code')
+  @Roles(UserRole.BRAND)
+  replacePromoCode(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) relationshipId: string,
+    @ActiveBrandId() brandId: string,
+    @Body() dto: ReplacePromoCodeDto,
+  ) {
+    return this.partnerships.replacePromoCode(user.id, relationshipId, dto, brandId);
+  }
+
+  @Post('brand/affiliate-relationships/:id/promo-code/confirm-tilda')
+  @Roles(UserRole.BRAND)
+  confirmPromoCodeProvisioned(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) relationshipId: string,
+    @ActiveBrandId() brandId: string,
+  ) {
+    return this.partnerships.confirmPromoCodeProvisioned(user.id, relationshipId, brandId);
   }
 }
 

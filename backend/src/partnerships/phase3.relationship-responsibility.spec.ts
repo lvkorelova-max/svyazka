@@ -53,12 +53,43 @@ describe('Phase 3 relationship responsibility', () => {
       id: 'application-a',
       offerId: 'offer-a',
       creatorId: 'creator-a',
+      version: 1,
       status: OfferApplicationStatus.PENDING,
+      termsStatus: 'CURRENT_ACCEPTED',
+      requiredCreatorAction: null,
+      latestAcceptedTermsId: 'terms-a',
+      applicableCommercialTermsId: 'terms-a',
+      latestAcceptedTerms: { id: 'terms-a' },
       offer: {
         id: 'offer-a',
         brandId: 'brand-a',
         productUrl: 'https://example.test/product',
         currentManagerId: 'manager-a',
+        currentVersion: { id: 'offer-version-a' },
+        currentCommercialTerms: {
+          id: 'terms-a',
+          version: 1,
+          calculationPolicy: 'POOL_65_35_V1',
+          totalCommissionPoolBps: 1500,
+          creatorPoolShareBps: 6500,
+          platformPoolShareBps: 3500,
+          creatorEffectiveGmvBps: 975,
+          platformEffectiveGmvBps: 525,
+          currency: 'RUB',
+          attributionPolicySnapshot: {},
+          attributionWindowSnapshot: {},
+          commissionEligibilitySnapshot: {},
+          confirmationPolicySnapshot: {},
+          returnPolicySnapshot: {},
+          cancellationPolicySnapshot: {},
+          payoutPolicySnapshot: {},
+          payoutScheduleSnapshot: {},
+          settlementModelSnapshot: {},
+          minimumPayoutMinor: 1000n,
+        },
+        customerDiscountType: 'NONE',
+        customerDiscountBps: null,
+        customerDiscountAmountMinor: null,
       },
       affiliateRelationship: null,
     };
@@ -71,7 +102,20 @@ describe('Phase 3 relationship responsibility', () => {
       affiliateRelationship: {
         findFirst: jest.fn().mockResolvedValue(null),
         create: relationshipCreate,
+        findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 'relationship-a' }),
       },
+      offerApplicationTermsAcceptance: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'acceptance-a',
+          acceptedAt: new Date('2026-09-29T00:00:00.000Z'),
+        }),
+      },
+      affiliateCommercialAgreement: {
+        create: jest.fn().mockResolvedValue({ id: 'agreement-a' }),
+      },
+      creatorLink: { create: jest.fn().mockResolvedValue({ id: 'link-a' }) },
+      creatorPromoCode: { create: jest.fn().mockResolvedValue({ id: 'promo-a' }) },
+      auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-a' }) },
     };
     const prisma = {
       $transaction: jest.fn((callback: (value: unknown) => unknown) => callback(tx)),
@@ -82,7 +126,7 @@ describe('Phase 3 relationship responsibility', () => {
     const service = new PartnershipsService(
       prisma,
       { get: jest.fn(() => 'http://localhost:3000') } as any,
-      { record: jest.fn() } as any,
+      { record: jest.fn(), requestId: jest.fn(() => 'request-a') } as any,
       brands,
     );
     await service.approveApplication('manager-a', 'application-a', 'brand-a');

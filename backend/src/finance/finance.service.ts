@@ -8,9 +8,17 @@ import {
 import { ConfigService } from '@nestjs/config';
 import {
   AffiliateRelationship,
+  AffiliateRelationshipStatus,
   AttributionSource,
+  BrandPaymentStatus,
+  BrandStatementStatus,
+  CommercialCalculationPolicy,
   CommissionStatus,
+  FinancialDisputeStatus,
+  LedgerAccountType,
+  LedgerPostingDirection,
   LedgerEntryType,
+  LedgerTransactionType,
   Order,
   OrderImportAction,
   OrderImportRowStatus,
@@ -18,7 +26,9 @@ import {
   OrderStatus,
   PayoutStatus,
   Prisma,
+  ReconciliationStatus,
 } from '@prisma/client';
+import { createHash } from 'crypto';
 import { CreatePayoutDto } from './dto/create-payout.dto';
 import {
   CreatorAnalyticsQueryDto,
@@ -28,6 +38,17 @@ import { CsvRecord, parseCsv } from './csv';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { BrandAccessService } from '../brand-access/brand-access.service';
+import {
+  IssueBrandStatementDto,
+  OpenFinancialDisputeDto,
+  RecordBrandPaymentDto,
+  ResolveFinancialDisputeDto,
+} from './dto/settlement.dto';
+import {
+  calculateBpsHalfUp,
+  calculateFinancialAmounts,
+  commissionBaseForSync,
+} from './finance-calculation';
 
 type CsvUpload = {
   buffer: Buffer;
@@ -43,6 +64,17 @@ type RelationshipWithOffer = AffiliateRelationship & {
     creatorCommissionBps: number;
     platformCommissionBps: number;
   };
+  commercialAgreement: {
+    id: string;
+    commercialTermsVersionNumber: number;
+    calculationPolicy: CommercialCalculationPolicy;
+    totalCommissionPoolBps: number;
+    creatorPoolShareBps: number;
+    platformPoolShareBps: number;
+    creatorEffectiveGmvBps: number;
+    platformEffectiveGmvBps: number;
+    currency: string;
+  } | null;
 };
 
 const CSV_STATUS: Record<string, OrderStatus> = {
@@ -89,6 +121,7 @@ export class FinanceService {
       data: {
         brandId: brand.id,
         originalFileName: file.originalname.slice(0, 255),
+        fileChecksum: createHash('sha256').update(file.buffer).digest('hex'),
         status: OrderImportStatus.UPLOADED,
       },
     });
@@ -223,18 +256,48 @@ export class FinanceService {
                 offerId: offer.id,
                 orderImportId: orderImport.id,
                 affiliateRelationshipId: row.attributedRelationshipId,
+                affiliateCommercialAgreementId:
+                  row.affiliateCommercialAgreementId,
                 externalOrderId: row.externalOrderId!,
                 orderDate: row.orderDate!,
                 amountKopecks: row.amountKopecks!,
                 returnedAmountKopecks: row.returnedAmountKopecks ?? 0,
+                amountMinor: BigInt(row.amountKopecks!),
+                returnedAmountMinor: BigInt(row.returnedAmountKopecks ?? 0),
                 currency: row.currency!,
                 status: row.orderStatus!,
                 attributionSource: row.attributionSource!,
+                attributionIdentifier:
+                  row.clickId?.toString() ??
+                  row.affiliateCode ??
+                  row.promoCode ??
+                  null,
+                attributedAt: row.attributedRelationshipId ? new Date() : null,
                 affiliateCode: row.affiliateCode,
                 promoCode: row.promoCode,
                 clickId: row.clickId,
                 creatorCommissionBps: row.creatorCommissionBpsSnapshot!,
                 platformCommissionBps: row.platformCommissionBpsSnapshot!,
+                totalCommissionPoolBps: row.totalCommissionPoolBpsSnapshot,
+                creatorPoolShareBps: row.creatorPoolShareBpsSnapshot,
+                platformPoolShareBps: row.platformPoolShareBpsSnapshot,
+                commercialTermsVersionNumber:
+                  row.commercialTermsVersionSnapshot,
+                calculationPolicy: row.calculationPolicySnapshot,
+                totalCommissionAmountMinor:
+                  BigInt(row.previewCreatorAmountKopecks ?? 0) +
+                  BigInt(row.previewPlatformAmountKopecks ?? 0),
+                creatorCommissionAmountMinor: BigInt(
+                  row.previewCreatorAmountKopecks ?? 0,
+                ),
+                platformCommissionAmountMinor: BigInt(
+                  row.previewPlatformAmountKopecks ?? 0,
+                ),
+                confirmedAt:
+                  row.orderStatus === OrderStatus.PAID ||
+                  row.orderStatus === OrderStatus.PARTIALLY_RETURNED
+                    ? new Date()
+                    : null,
                 managerIdAtAttribution: attributedRelationship?.currentManagerId ?? null,
               },
             });
@@ -251,6 +314,9 @@ export class FinanceService {
               data: {
                 status: row.orderStatus!,
                 returnedAmountKopecks: row.returnedAmountKopecks ?? 0,
+                returnedAmountMinor: BigInt(
+                  row.returnedAmountKopecks ?? 0,
+                ),
                 orderImportId: orderImport.id,
                 importedAt: new Date(),
               },
@@ -334,6 +400,102 @@ export class FinanceService {
       sortBy: 'netSalesKopecks',
     } as CreatorAnalyticsQueryDto, activeBrandId);
     return report.total;
+  }
+
+  async getBrandFinanceOverview(
+    userId: string,
+    query: ListFinanceQueryDto,
+  ) {
+    const brand = await this.getBrand(userId);
+    const orderWhere: Prisma.OrderWhereInput = {
+      brandId: brand.id,
+      orderDate: this.orderDateRange(query),
+      ...(query.offerId ? { offerId: query.offerId } : {}),
+    };
+    const [orders, commissions, statements] = await Promise.all([
+      this.prisma.order.findMany({ where: orderWhere }),
+      this.prisma.commission.findMany({ where: { order: orderWhere } }),
+      this.prisma.brandStatement.findMany({
+        where: {
+          brandId: brand.id,
+          ...(query.dateFrom || query.dateTo
+            ? { periodStart: this.orderDateRange(query) }
+            : {}),
+        },
+      }),
+    ]);
+    const attributedGmv = orders
+      .filter((order) => order.affiliateRelationshipId)
+      .reduce((sum, order) => sum + BigInt(order.amountKopecks), 0n);
+    const pendingGmv = orders
+      .filter((order) => order.status === OrderStatus.PENDING)
+      .reduce((sum, order) => sum + BigInt(order.amountKopecks), 0n);
+    const confirmedGmv = orders
+      .filter((order) => PAID_ORDER_STATUSES.includes(order.status))
+      .reduce(
+        (sum, order) =>
+          sum +
+          BigInt(
+            order.status === OrderStatus.RETURNED
+              ? 0
+              : order.amountKopecks - order.returnedAmountKopecks,
+          ),
+        0n,
+      );
+    const creatorAccrued = commissions.reduce(
+      (sum, commission) =>
+        sum +
+        (commission.creatorAmountMinor ??
+          BigInt(commission.creatorAmountKopecks)),
+      0n,
+    );
+    const platformAccrued = commissions.reduce(
+      (sum, commission) =>
+        sum +
+        (commission.platformAmountMinor ??
+          BigInt(commission.platformAmountKopecks)),
+      0n,
+    );
+    const totalDue = statements.reduce(
+      (sum, statement) => sum + statement.totalDueMinor,
+      0n,
+    );
+    const paid = statements.reduce(
+      (sum, statement) => sum + statement.paidMinor,
+      0n,
+    );
+    const now = new Date();
+    return {
+      currency: this.singleCurrency(orders.map((order) => order.currency)),
+      attributedGmvMinor: attributedGmv,
+      pendingGmvMinor: pendingGmv,
+      confirmedGmvMinor: confirmedGmv,
+      creatorCommissionsAccruedMinor: creatorAccrued,
+      platformFeesAccruedMinor: platformAccrued,
+      totalPayableMinor: totalDue,
+      paidMinor: paid,
+      unpaidMinor: totalDue - paid,
+      overdueMinor: statements
+        .filter(
+          (statement) =>
+            statement.dueAt &&
+            statement.dueAt < now &&
+            statement.status !== BrandStatementStatus.PAID,
+        )
+        .reduce(
+          (sum, statement) =>
+            sum + (statement.totalDueMinor - statement.paidMinor),
+          0n,
+        ),
+      returnsMinor: orders.reduce(
+        (sum, order) => sum + BigInt(order.returnedAmountKopecks),
+        0n,
+      ),
+      recoverableMinor: commissions.reduce(
+        (sum, commission) => sum + commission.recoverableAmountMinor,
+        0n,
+      ),
+    };
   }
 
   async getCreatorAnalytics(userId: string, query: CreatorAnalyticsQueryDto, activeBrandId?: string) {
@@ -467,10 +629,14 @@ export class FinanceService {
 
   async listCreatorOrders(userId: string, query: ListFinanceQueryDto) {
     const creator = await this.getCreator(userId);
-    return this.paginateOrders(
+    const result = await this.paginateOrders(
       { affiliateRelationship: { creatorId: creator.id } },
       query,
     );
+    return {
+      ...result,
+      items: result.items.map((order) => this.presentCreatorOrder(order)),
+    };
   }
 
   async listCreatorCommissions(userId: string, query: ListFinanceQueryDto) {
@@ -523,6 +689,30 @@ export class FinanceService {
     });
   }
 
+  async listLedgerTransactions(query: ListFinanceQueryDto) {
+    const page = query.page ?? 1;
+    const pageSize = query.pageSize ?? 25;
+    const [items, totalItems] = await Promise.all([
+      this.prisma.ledgerTransaction.findMany({
+        include: {
+          postings: {
+            include: { account: true },
+            orderBy: { createdAt: 'asc' },
+          },
+          order: { select: { id: true, externalOrderId: true } },
+          commission: { select: { id: true, creatorId: true, offerId: true } },
+          payout: { select: { id: true, creatorId: true, status: true } },
+          statement: { select: { id: true, brandId: true, status: true } },
+        },
+        orderBy: { createdAt: query.sortDirection ?? 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.ledgerTransaction.count(),
+    ]);
+    return { items, pagination: { page, pageSize, totalItems } };
+  }
+
   async listPayouts(query: ListFinanceQueryDto) {
     return this.paginate('payout', {}, query, {
       createdAt: query.sortDirection ?? 'desc',
@@ -539,9 +729,13 @@ export class FinanceService {
         const commissions = await tx.commission.findMany({
           where: {
             id: { in: uniqueIds },
-            status: CommissionStatus.AVAILABLE,
+            status: {
+              in: [CommissionStatus.AVAILABLE, CommissionStatus.PAYABLE],
+            },
             payoutId: null,
-            hasPostPayoutDebt: false,
+          },
+          include: {
+            affiliateRelationship: { include: { commercialAgreement: true } },
           },
         });
         if (commissions.length !== uniqueIds.length) {
@@ -551,23 +745,86 @@ export class FinanceService {
         if (creatorIds.size !== 1) {
           throw new BadRequestException('Один payout может принадлежать только одному креатору');
         }
-        const amount = commissions.reduce(
-          (sum, commission) => sum + BigInt(commission.creatorAmountKopecks),
+        const currencies = new Set(commissions.map((commission) => commission.currency));
+        if (currencies.size !== 1) {
+          throw new BadRequestException(
+            'Один payout не может объединять разные валюты',
+          );
+        }
+        const currency = commissions[0].currency;
+        const grossAmount = commissions.reduce(
+          (sum, commission) =>
+            sum +
+            (commission.creatorAmountMinor ??
+              BigInt(commission.creatorAmountKopecks)),
           0n,
         );
-        if (amount <= 0n) throw new BadRequestException('Сумма выплаты должна быть больше нуля');
+        const recoverable = await tx.commission.aggregate({
+          where: {
+            creatorId: commissions[0].creatorId,
+            recoverableAmountMinor: { gt: 0n },
+          },
+          _sum: { recoverableAmountMinor: true },
+        });
+        let recoveryRemaining =
+          recoverable._sum.recoverableAmountMinor ?? 0n;
+        const payoutItems = commissions.map((commission) => {
+          const gross =
+            commission.creatorAmountMinor ??
+            BigInt(commission.creatorAmountKopecks);
+          const recovery =
+            recoveryRemaining > gross ? gross : recoveryRemaining;
+          recoveryRemaining -= recovery;
+          return {
+            commissionId: commission.id,
+            affiliateRelationshipId: commission.affiliateRelationshipId,
+            creatorId: commission.creatorId,
+            amountMinor: gross - recovery,
+            recoveryAmountMinor: recovery,
+            currency,
+          };
+        });
+        const amount = payoutItems.reduce(
+          (sum, item) => sum + item.amountMinor,
+          0n,
+        );
+        if (amount <= 0n) {
+          throw new BadRequestException(
+            'Вся выбранная сумма направляется на погашение recoverable balance',
+          );
+        }
+        const minimumPayoutMinor = commissions.reduce(
+          (maximum, commission) => {
+            const threshold =
+              commission.affiliateRelationship.commercialAgreement
+                ?.minimumPayoutMinor ?? 0n;
+            return threshold > maximum ? threshold : maximum;
+          },
+          0n,
+        );
+        if (amount < minimumPayoutMinor) {
+          throw new BadRequestException(
+            `Минимальная сумма выплаты: ${minimumPayoutMinor.toString()} ${currency}`,
+          );
+        }
         const payout = await tx.payout.create({
           data: {
             creatorId: commissions[0].creatorId,
             amountKopecks: amount,
+            currency,
             createdByUserId: adminUserId,
             reference: dto.reference?.trim() || null,
+            payoutItems: {
+              create: payoutItems,
+            },
           },
         });
         const reserved = await tx.commission.updateMany({
           where: {
             id: { in: uniqueIds },
-            status: CommissionStatus.AVAILABLE,
+            status: {
+              in: [CommissionStatus.AVAILABLE, CommissionStatus.PAYABLE],
+            },
             payoutId: null,
           },
           data: { payoutId: payout.id },
@@ -582,7 +839,12 @@ export class FinanceService {
             entityType: 'Payout',
             entityId: payout.id,
             requestId: this.audit.requestId(),
-            metadata: { amountKopecks: amount.toString(), commissionsCount: uniqueIds.length },
+            metadata: {
+              amountKopecks: amount.toString(),
+              grossAmountMinor: grossAmount.toString(),
+              recoveryAmountMinor: (grossAmount - amount).toString(),
+              commissionsCount: uniqueIds.length,
+            },
           },
         });
         return tx.payout.findUnique({
@@ -631,7 +893,7 @@ export class FinanceService {
       async (tx) => {
         const payout = await tx.payout.findUnique({
           where: { id: payoutId },
-          include: { commissions: true },
+          include: { commissions: true, payoutItems: true },
         });
         if (!payout) throw new NotFoundException('Выплата не найдена');
         if (payout.status === PayoutStatus.PAID) return payout;
@@ -641,20 +903,35 @@ export class FinanceService {
         if (
           payout.commissions.some(
             (commission) =>
-              commission.status !== CommissionStatus.AVAILABLE ||
+              (commission.status !== CommissionStatus.AVAILABLE &&
+                commission.status !== CommissionStatus.PAYABLE) ||
               commission.hasPostPayoutDebt,
           )
         ) {
           throw new ConflictException('Состав выплаты изменился после подтверждения');
         }
-        const currentAmount = payout.commissions.reduce(
-          (sum, commission) => sum + BigInt(commission.creatorAmountKopecks),
+        const currentAmount = payout.payoutItems.reduce(
+          (sum, item) => sum + item.amountMinor,
           0n,
         );
         if (currentAmount !== payout.amountKopecks) {
           throw new ConflictException('Сумма выплаты больше не совпадает с комиссиями');
         }
         for (const commission of payout.commissions) {
+          const payoutItem = payout.payoutItems.find(
+            (item) => item.commissionId === commission.id,
+          );
+          if (!payoutItem) {
+            throw new ConflictException(
+              'Payout item отсутствует для выбранной комиссии',
+            );
+          }
+          if (payoutItem.amountMinor === 0n) continue;
+          if (payoutItem.amountMinor > BigInt(2_147_483_647)) {
+            throw new ConflictException(
+              'Сумма payout item превышает legacy ledger limit',
+            );
+          }
           await tx.ledgerEntry.upsert({
             where: { eventKey: `payout:${payout.id}:commission:${commission.id}` },
             update: {},
@@ -664,13 +941,101 @@ export class FinanceService {
               orderId: commission.orderId,
               payoutId: payout.id,
               type: LedgerEntryType.PAYOUT,
-              amountKopecks: -commission.creatorAmountKopecks,
+              amountKopecks: -Number(payoutItem.amountMinor),
               eventKey: `payout:${payout.id}:commission:${commission.id}`,
             },
           });
         }
+        await this.createBalancedTransaction(tx, {
+          type: LedgerTransactionType.PAYOUT,
+          eventKey: `payout:${payout.id}:financial`,
+          currency: payout.currency,
+          payoutId: payout.id,
+          source: 'ADMIN_MANUAL_PAYOUT',
+          postings: [
+            {
+              accountType: LedgerAccountType.CREATOR_PAYABLE,
+              ownerType: 'CreatorProfile',
+              ownerId: payout.creatorId,
+              direction: LedgerPostingDirection.DEBIT,
+              amount: payout.amountKopecks,
+            },
+            {
+              accountType: LedgerAccountType.CASH_CLEARING,
+              ownerType: 'Platform',
+              ownerId: 'svyazka',
+              direction: LedgerPostingDirection.CREDIT,
+              amount: payout.amountKopecks,
+            },
+          ],
+        });
+        const recoveryAmount = payout.payoutItems.reduce(
+          (sum, item) => sum + item.recoveryAmountMinor,
+          0n,
+        );
+        if (recoveryAmount > 0n) {
+          await this.createBalancedTransaction(tx, {
+            type: LedgerTransactionType.RECOVERY,
+            eventKey: `payout:${payout.id}:recoverable-offset`,
+            currency: payout.currency,
+            payoutId: payout.id,
+            source: 'CREATOR_CARRY_FORWARD_RECOVERY',
+            postings: [
+              {
+                accountType: LedgerAccountType.CREATOR_PAYABLE,
+                ownerType: 'CreatorProfile',
+                ownerId: payout.creatorId,
+                direction: LedgerPostingDirection.DEBIT,
+                amount: recoveryAmount,
+              },
+              {
+                accountType: LedgerAccountType.CREATOR_RECOVERABLE,
+                ownerType: 'CreatorProfile',
+                ownerId: payout.creatorId,
+                direction: LedgerPostingDirection.CREDIT,
+                amount: recoveryAmount,
+              },
+            ],
+          });
+          let remaining = recoveryAmount;
+          const debts = await tx.commission.findMany({
+            where: {
+              creatorId: payout.creatorId,
+              recoverableAmountMinor: { gt: 0n },
+            },
+            orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }],
+          });
+          for (const debt of debts) {
+            if (remaining <= 0n) break;
+            const recovered =
+              remaining > debt.recoverableAmountMinor
+                ? debt.recoverableAmountMinor
+                : remaining;
+            const next = debt.recoverableAmountMinor - recovered;
+            await tx.commission.update({
+              where: { id: debt.id },
+              data: {
+                recoverableAmountMinor: next,
+                debtAmountKopecks:
+                  next > BigInt(2_147_483_647) ? 2_147_483_647 : Number(next),
+                hasPostPayoutDebt: next > 0n,
+              },
+            });
+            remaining -= recovered;
+          }
+          if (remaining !== 0n) {
+            throw new ConflictException(
+              'Recoverable balance changed during payout',
+            );
+          }
+        }
         await tx.commission.updateMany({
-          where: { payoutId: payout.id, status: CommissionStatus.AVAILABLE },
+          where: {
+            payoutId: payout.id,
+            status: {
+              in: [CommissionStatus.AVAILABLE, CommissionStatus.PAYABLE],
+            },
+          },
           data: { status: CommissionStatus.PAID },
         });
         const updated = await tx.payout.update({
@@ -774,6 +1139,643 @@ export class FinanceService {
     return { released: result.count };
   }
 
+  async issueBrandStatement(
+    adminUserId: string,
+    dto: IssueBrandStatementDto,
+  ) {
+    const periodStart = new Date(dto.periodStart);
+    const periodEnd = new Date(dto.periodEnd);
+    const dueAt = new Date(dto.dueAt);
+    if (periodStart >= periodEnd) {
+      throw new BadRequestException('Начало периода должно быть раньше окончания');
+    }
+    if (dueAt <= periodEnd) {
+      throw new BadRequestException('Срок оплаты должен быть после конца периода');
+    }
+    const currency = dto.currency.toUpperCase();
+
+    return this.prisma.$transaction(
+      async (tx) => {
+        const brand = await tx.brandProfile.findUnique({
+          where: { id: dto.brandId },
+        });
+        if (!brand) throw new NotFoundException('Бренд не найден');
+
+        const existing = await tx.brandStatement.findFirst({
+          where: {
+            brandId: brand.id,
+            periodStart,
+            periodEnd,
+            currency,
+            correctedStatementId: null,
+            status: { not: BrandStatementStatus.CORRECTED },
+          },
+        });
+        if (existing) return existing;
+
+        const transactions = await tx.ledgerTransaction.findMany({
+          where: {
+            currency,
+            createdAt: { gte: periodStart, lt: periodEnd },
+            order: { brandId: brand.id },
+            type: {
+              in: [
+                LedgerTransactionType.ACCRUAL,
+                LedgerTransactionType.REVERSAL,
+                LedgerTransactionType.ADJUSTMENT,
+                LedgerTransactionType.RECOVERY,
+              ],
+            },
+          },
+          include: {
+            order: { select: { id: true, offerId: true } },
+            commission: { select: { id: true } },
+            postings: { include: { account: true } },
+          },
+          orderBy: { createdAt: 'asc' },
+        });
+
+        const lines = transactions.map((transaction) => {
+          const sign =
+            transaction.type === LedgerTransactionType.ACCRUAL ? 1n : -1n;
+          const creator = transaction.postings
+            .filter(
+              (posting) =>
+                posting.account.accountType ===
+                  LedgerAccountType.CREATOR_PAYABLE ||
+                posting.account.accountType ===
+                  LedgerAccountType.CREATOR_RECOVERABLE,
+            )
+            .reduce((sum, posting) => sum + posting.amountMinor, 0n);
+          const platform = transaction.postings
+            .filter(
+              (posting) =>
+                posting.account.accountType ===
+                LedgerAccountType.PLATFORM_REVENUE,
+            )
+            .reduce((sum, posting) => sum + posting.amountMinor, 0n);
+
+          return {
+            offerId: transaction.order!.offerId,
+            orderId: transaction.orderId,
+            commissionId: transaction.commissionId,
+            lineType: transaction.type,
+            creatorAmountMinor: creator * sign,
+            platformAmountMinor: platform * sign,
+            adjustmentMinor:
+              transaction.type === LedgerTransactionType.ADJUSTMENT
+                ? (creator + platform) * sign
+                : 0n,
+            description: transaction.reason,
+          };
+        });
+
+        const creatorObligations = lines.reduce(
+          (sum, line) =>
+            line.lineType === LedgerTransactionType.ACCRUAL
+              ? sum + line.creatorAmountMinor
+              : sum,
+          0n,
+        );
+        const platformFee = lines.reduce(
+          (sum, line) =>
+            line.lineType === LedgerTransactionType.ACCRUAL
+              ? sum + line.platformAmountMinor
+              : sum,
+          0n,
+        );
+        const reversals = lines
+          .filter((line) => line.lineType === LedgerTransactionType.REVERSAL)
+          .reduce(
+            (sum, line) =>
+              sum - line.creatorAmountMinor - line.platformAmountMinor,
+            0n,
+          );
+        const adjustments = lines.reduce(
+          (sum, line) => sum + line.adjustmentMinor,
+          0n,
+        );
+        const totalDue =
+          creatorObligations + platformFee - reversals + adjustments;
+        if (totalDue < 0n) {
+          throw new ConflictException('Statement total cannot be negative');
+        }
+
+        const hashPayload = {
+          brandId: brand.id,
+          periodStart: periodStart.toISOString(),
+          periodEnd: periodEnd.toISOString(),
+          currency,
+          lines: lines.map((line) => ({
+            ...line,
+            creatorAmountMinor: line.creatorAmountMinor.toString(),
+            platformAmountMinor: line.platformAmountMinor.toString(),
+            adjustmentMinor: line.adjustmentMinor.toString(),
+          })),
+        };
+        const issuedAt = new Date();
+        const statement = await tx.brandStatement.create({
+          data: {
+            brandId: brand.id,
+            periodStart,
+            periodEnd,
+            currency,
+            status: BrandStatementStatus.ISSUED,
+            creatorObligationsMinor: creatorObligations,
+            platformFeeMinor: platformFee,
+            reversalsMinor: reversals,
+            adjustmentsMinor: adjustments,
+            totalDueMinor: totalDue,
+            issuedAt,
+            dueAt,
+            issuedByUserId: adminUserId,
+            contentHash: createHash('sha256')
+              .update(
+                JSON.stringify(hashPayload, (_key, value) =>
+                  typeof value === 'bigint' ? value.toString() : value,
+                ),
+              )
+              .digest('hex'),
+            lines: { create: lines },
+          },
+          include: { lines: true },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            actorUserId: adminUserId,
+            action: 'BRAND_STATEMENT_ISSUED',
+            entityType: 'BrandStatement',
+            entityId: statement.id,
+            requestId: this.audit.requestId(),
+            metadata: {
+              brandId: brand.id,
+              periodStart: periodStart.toISOString(),
+              periodEnd: periodEnd.toISOString(),
+              currency,
+              totalDueMinor: totalDue.toString(),
+              contentHash: statement.contentHash,
+            },
+          },
+        });
+        return statement;
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
+  async recordBrandPayment(
+    adminUserId: string,
+    dto: RecordBrandPaymentDto,
+  ) {
+    const amountMinor = this.parsePositiveBigInt(dto.amountMinor, 'amountMinor');
+    const currency = dto.currency.toUpperCase();
+    const allocationInputs = dto.allocations.map((allocation) => ({
+      statementId: allocation.statementId,
+      amountMinor: this.parsePositiveBigInt(
+        allocation.amountMinor,
+        'allocation.amountMinor',
+      ),
+    }));
+    const allocated = allocationInputs.reduce(
+      (sum, allocation) => sum + allocation.amountMinor,
+      0n,
+    );
+    if (allocated > amountMinor) {
+      throw new BadRequestException('Распределение превышает сумму платежа');
+    }
+
+    return this.prisma.$transaction(
+      async (tx) => {
+        const statements = await tx.brandStatement.findMany({
+          where: {
+            id: { in: allocationInputs.map((item) => item.statementId) },
+          },
+        });
+        if (statements.length !== allocationInputs.length) {
+          throw new NotFoundException('Часть statements не найдена');
+        }
+
+        for (const statement of statements) {
+          if (
+            statement.brandId !== dto.brandId ||
+            statement.currency !== currency
+          ) {
+            throw new BadRequestException(
+              'Payment allocation must use one Brand and currency',
+            );
+          }
+          if (statement.status === BrandStatementStatus.CORRECTED) {
+            throw new ConflictException('Исправленный statement нельзя оплачивать');
+          }
+        }
+
+        const payment = await tx.brandPayment.create({
+          data: {
+            brandId: dto.brandId,
+            currency,
+            amountMinor,
+            status:
+              allocationInputs.length > 0
+                ? BrandPaymentStatus.ALLOCATED
+                : BrandPaymentStatus.RECORDED,
+            reference: dto.reference?.trim() || null,
+            paidAt: new Date(dto.paidAt),
+            recordedByUserId: adminUserId,
+            allocations: {
+              create: allocationInputs,
+            },
+          },
+          include: { allocations: true },
+        });
+
+        for (const allocation of allocationInputs) {
+          const statement = statements.find(
+            (item) => item.id === allocation.statementId,
+          )!;
+          const nextPaid = statement.paidMinor + allocation.amountMinor;
+          if (nextPaid > statement.totalDueMinor) {
+            throw new ConflictException(
+              'Распределение превышает остаток по statement',
+            );
+          }
+          await tx.brandStatement.update({
+            where: { id: statement.id },
+            data: {
+              paidMinor: nextPaid,
+              status:
+                nextPaid === statement.totalDueMinor
+                  ? BrandStatementStatus.PAID
+                  : statement.status,
+              paidAt:
+                nextPaid === statement.totalDueMinor
+                  ? new Date(dto.paidAt)
+                  : statement.paidAt,
+            },
+          });
+          await this.createBalancedTransaction(tx, {
+            type: LedgerTransactionType.SETTLEMENT,
+            eventKey: `brand-payment:${payment.id}:statement:${statement.id}`,
+            currency,
+            statementId: statement.id,
+            source: 'ADMIN_RECORDED_BRAND_PAYMENT',
+            postings: [
+              {
+                accountType: LedgerAccountType.CASH_CLEARING,
+                ownerType: 'Platform',
+                ownerId: 'svyazka',
+                direction: LedgerPostingDirection.DEBIT,
+                amount: allocation.amountMinor,
+              },
+              {
+                accountType: LedgerAccountType.BRAND_OBLIGATION,
+                ownerType: 'BrandProfile',
+                ownerId: dto.brandId,
+                direction: LedgerPostingDirection.CREDIT,
+                amount: allocation.amountMinor,
+              },
+            ],
+          });
+        }
+
+        await tx.auditLog.create({
+          data: {
+            actorUserId: adminUserId,
+            action: 'BRAND_PAYMENT_RECORDED',
+            entityType: 'BrandPayment',
+            entityId: payment.id,
+            requestId: this.audit.requestId(),
+            metadata: {
+              brandId: dto.brandId,
+              currency,
+              amountMinor: amountMinor.toString(),
+              allocationsCount: allocationInputs.length,
+            },
+          },
+        });
+        return payment;
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
+  async listAdminBrandPayments() {
+    return this.prisma.brandPayment.findMany({
+      include: {
+        brand: {
+          select: {
+            id: true,
+            brandName: true,
+          },
+        },
+        allocations: {
+          include: {
+            statement: {
+              select: {
+                id: true,
+                periodStart: true,
+                periodEnd: true,
+                totalDueMinor: true,
+                paidMinor: true,
+                status: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: [{ paidAt: 'desc' }, { createdAt: 'desc' }],
+    });
+  }
+
+  async openDispute(userId: string, dto: OpenFinancialDisputeDto) {
+    const brand = await this.getBrand(userId);
+    return this.prisma.$transaction(async (tx) => {
+      const order = await tx.order.findFirst({
+        where: { id: dto.orderId, brandId: brand.id },
+        include: { commission: true },
+      });
+      if (!order) throw new NotFoundException('Заказ не найден');
+
+      const existing = await tx.financialDispute.findFirst({
+        where: { orderId: order.id, status: FinancialDisputeStatus.OPEN },
+      });
+      if (existing) return existing;
+
+      const dispute = await tx.financialDispute.create({
+        data: {
+          brandId: brand.id,
+          orderId: order.id,
+          commissionId: order.commission?.id ?? null,
+          reason: dto.reason.trim(),
+          openedByUserId: userId,
+        },
+      });
+      if (order.commission) {
+        await tx.commission.update({
+          where: { id: order.commission.id },
+          data: {
+            status: CommissionStatus.DISPUTED,
+            disputedAt: new Date(),
+          },
+        });
+      }
+      await tx.auditLog.create({
+        data: {
+          actorUserId: userId,
+          action: 'FINANCIAL_DISPUTE_OPENED',
+          entityType: 'FinancialDispute',
+          entityId: dispute.id,
+          requestId: this.audit.requestId(),
+          metadata: {
+            orderId: order.id,
+            commissionId: order.commission?.id ?? null,
+          },
+        },
+      });
+      return dispute;
+    });
+  }
+
+  async resolveDispute(
+    adminUserId: string,
+    disputeId: string,
+    dto: ResolveFinancialDisputeDto,
+  ) {
+    if ((dto.adjustmentMinor ?? 0) !== 0) {
+      throw new BadRequestException(
+        'Финансовая корректировка должна оформляться отдельным adjustment',
+      );
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const dispute = await tx.financialDispute.findUnique({
+        where: { id: disputeId },
+        include: { commission: { include: { payout: true } } },
+      });
+      if (!dispute) throw new NotFoundException('Dispute не найден');
+      if (dispute.status !== FinancialDisputeStatus.OPEN) return dispute;
+
+      const resolvedAt = new Date();
+      const resolution = dto.resolution.trim();
+      const updated = await tx.financialDispute.update({
+        where: { id: dispute.id },
+        data: {
+          status: FinancialDisputeStatus.RESOLVED,
+          resolvedAt,
+          resolution,
+        },
+      });
+      if (dispute.commission?.status === CommissionStatus.DISPUTED) {
+        await tx.commission.update({
+          where: { id: dispute.commission.id },
+          data: {
+            status:
+              dispute.commission.payout?.status === PayoutStatus.PAID
+                ? CommissionStatus.PAID
+                : dispute.commission.payableAt
+                  ? CommissionStatus.PAYABLE
+                  : dispute.commission.holdUntil
+                    ? CommissionStatus.HOLD
+                    : CommissionStatus.PENDING,
+            disputedAt: null,
+          },
+        });
+      }
+      await tx.auditLog.create({
+        data: {
+          actorUserId: adminUserId,
+          action: 'FINANCIAL_DISPUTE_RESOLVED',
+          entityType: 'FinancialDispute',
+          entityId: dispute.id,
+          requestId: this.audit.requestId(),
+          metadata: {
+            orderId: dispute.orderId,
+            resolution,
+          },
+        },
+      });
+      return updated;
+    });
+  }
+
+  async runReconciliation(adminUserId: string) {
+    const [transactions, orders, commissions, payouts, statements, allocations] =
+      await Promise.all([
+        this.prisma.ledgerTransaction.findMany({ include: { postings: true } }),
+        this.prisma.order.findMany({
+          where: { affiliateCommercialAgreementId: { not: null } },
+        }),
+        this.prisma.commission.findMany({
+          include: {
+            ledgerTransactions: {
+              include: { postings: { include: { account: true } } },
+            },
+          },
+        }),
+        this.prisma.payout.findMany({ include: { payoutItems: true } }),
+        this.prisma.brandStatement.findMany({ include: { lines: true } }),
+        this.prisma.brandPaymentAllocation.findMany(),
+      ]);
+    const mismatches: Array<Record<string, string>> = [];
+    for (const transaction of transactions) {
+      const debit = transaction.postings
+        .filter((posting) => posting.direction === LedgerPostingDirection.DEBIT)
+        .reduce((sum, posting) => sum + posting.amountMinor, 0n);
+      const credit = transaction.postings
+        .filter((posting) => posting.direction === LedgerPostingDirection.CREDIT)
+        .reduce((sum, posting) => sum + posting.amountMinor, 0n);
+      if (debit !== credit) {
+        mismatches.push({
+          type: 'UNBALANCED_LEDGER_TRANSACTION',
+          entityId: transaction.id,
+        });
+      }
+    }
+    for (const order of orders) {
+      if (
+        order.totalCommissionAmountMinor !== null &&
+        order.creatorCommissionAmountMinor !== null &&
+        order.platformCommissionAmountMinor !== null &&
+        order.totalCommissionAmountMinor !==
+          order.creatorCommissionAmountMinor +
+            order.platformCommissionAmountMinor
+      ) {
+        mismatches.push({
+          type: 'ORDER_COMMISSION_IDENTITY',
+          entityId: order.id,
+        });
+      }
+    }
+    for (const payout of payouts) {
+      const itemTotal = payout.payoutItems.reduce(
+        (sum, item) => sum + item.amountMinor,
+        0n,
+      );
+      if (itemTotal !== payout.amountKopecks) {
+        mismatches.push({ type: 'PAYOUT_ITEMS_TOTAL', entityId: payout.id });
+      }
+    }
+    for (const commission of commissions) {
+      const accrualCreator = commission.ledgerTransactions
+        .filter(
+          (transaction) => transaction.type === LedgerTransactionType.ACCRUAL,
+        )
+        .flatMap((transaction) => transaction.postings)
+        .filter(
+          (posting) =>
+            posting.direction === LedgerPostingDirection.CREDIT &&
+            posting.account.accountType === LedgerAccountType.CREATOR_PAYABLE &&
+            posting.amountMinor > 0n,
+        )
+        .reduce((sum, posting) => sum + posting.amountMinor, 0n);
+      const reversedCreator = commission.ledgerTransactions
+        .filter(
+          (transaction) => transaction.type === LedgerTransactionType.REVERSAL,
+        )
+        .flatMap((transaction) => transaction.postings)
+        .filter(
+          (posting) =>
+            posting.direction === LedgerPostingDirection.DEBIT &&
+            (posting.account.accountType ===
+              LedgerAccountType.CREATOR_PAYABLE ||
+              posting.account.accountType ===
+                LedgerAccountType.CREATOR_RECOVERABLE) &&
+            posting.amountMinor > 0n,
+        )
+        .reduce((sum, posting) => sum + posting.amountMinor, 0n);
+      if (reversedCreator > accrualCreator) {
+        mismatches.push({
+          type: 'COMMISSION_REVERSAL_EXCEEDS_ACCRUAL',
+          entityId: commission.id,
+        });
+      }
+    }
+    for (const statement of statements) {
+      const creatorLineTotal = statement.lines.reduce(
+        (sum, line) =>
+          line.lineType === LedgerTransactionType.ACCRUAL
+            ? sum + line.creatorAmountMinor
+            : sum,
+        0n,
+      );
+      const platformLineTotal = statement.lines.reduce(
+        (sum, line) =>
+          line.lineType === LedgerTransactionType.ACCRUAL
+            ? sum + line.platformAmountMinor
+            : sum,
+        0n,
+      );
+      const reversalLineTotal = statement.lines
+        .filter((line) => line.lineType === LedgerTransactionType.REVERSAL)
+        .reduce(
+          (sum, line) =>
+            sum - line.creatorAmountMinor - line.platformAmountMinor,
+          0n,
+        );
+      const adjustmentLineTotal = statement.lines.reduce(
+        (sum, line) => sum + line.adjustmentMinor,
+        0n,
+      );
+      if (
+        statement.totalDueMinor !==
+          statement.creatorObligationsMinor +
+            statement.platformFeeMinor -
+            statement.reversalsMinor +
+            statement.adjustmentsMinor ||
+        statement.creatorObligationsMinor !== creatorLineTotal ||
+        statement.platformFeeMinor !== platformLineTotal ||
+        statement.reversalsMinor !== reversalLineTotal ||
+        statement.adjustmentsMinor !== adjustmentLineTotal
+      ) {
+        mismatches.push({
+          type: 'STATEMENT_TOTAL',
+          entityId: statement.id,
+        });
+      }
+      const allocated = allocations
+        .filter((allocation) => allocation.statementId === statement.id)
+        .reduce((sum, allocation) => sum + allocation.amountMinor, 0n);
+      if (
+        allocated !== statement.paidMinor ||
+        allocated > statement.totalDueMinor
+      ) {
+        mismatches.push({
+          type: 'STATEMENT_PAYMENT_ALLOCATION',
+          entityId: statement.id,
+        });
+      }
+    }
+    const status =
+      mismatches.length === 0
+        ? ReconciliationStatus.PASSED
+        : ReconciliationStatus.FAILED;
+    const run = await this.prisma.reconciliationRun.create({
+      data: {
+        status,
+        scope: 'PLATFORM',
+        mismatchCount: mismatches.length,
+        details: { mismatches },
+        requestId: this.audit.requestId(),
+      },
+    });
+    await this.audit.record({
+      actorUserId: adminUserId,
+      action: 'FINANCIAL_RECONCILIATION_RUN',
+      entityType: 'ReconciliationRun',
+      entityId: run.id,
+      metadata: { status, mismatchCount: mismatches.length },
+    });
+    return run;
+  }
+
+  async syncStage8Commission(
+    tx: Prisma.TransactionClient,
+    order: Order,
+    eventId: string,
+    eligibleAmountMinor?: bigint,
+  ) {
+    return this.syncCommission(tx, order, eventId, eligibleAmountMinor);
+  }
+
   private async buildPreviewRows(
     brandId: string,
     orderImportId: string,
@@ -782,12 +1784,16 @@ export class FinanceService {
     const offers = await this.prisma.offer.findMany({ where: { brandId } });
     const relationships = await this.prisma.affiliateRelationship.findMany({
       where: { offer: { brandId } },
-      include: { offer: true },
+      include: { offer: true, commercialAgreement: true },
     });
     const clickIds = records.map((row) => row.click_id).filter(Boolean);
     const clicks = await this.prisma.click.findMany({
       where: { id: { in: clickIds }, offer: { brandId } },
-      include: { affiliateRelationship: { include: { offer: true } } },
+      include: {
+        affiliateRelationship: {
+          include: { offer: true, commercialAgreement: true },
+        },
+      },
     });
     const externalIds = records.map((row) => row.external_order_id).filter(Boolean);
     const existingOrders = await this.prisma.order.findMany({
@@ -911,6 +1917,17 @@ export class FinanceService {
       if (!offer) errors.push('Невозможно определить оффер');
 
       const existing = externalOrderId ? existingMap.get(externalOrderId) : undefined;
+      if (
+        selected &&
+        this.isStage7FinancialActivationEnabled() &&
+        !existing &&
+        (selected.relationship.status !== AffiliateRelationshipStatus.ACTIVE ||
+          !selected.relationship.commercialAgreement)
+      ) {
+        errors.push(
+          'Новая финансовая атрибуция требует активной партнёрской связи с коммерческим соглашением',
+        );
+      }
       let action: OrderImportAction = OrderImportAction.CREATE;
       let rowStatus: OrderImportRowStatus = conflict
         ? OrderImportRowStatus.CONFLICT
@@ -975,18 +1992,51 @@ export class FinanceService {
         }
       }
 
-      const bps =
-        existing ??
-        (offer
+      const agreement = selected?.relationship.commercialAgreement ?? null;
+      const bps = existing
+        ? {
+            creatorCommissionBps: existing.creatorCommissionBps,
+            platformCommissionBps: existing.platformCommissionBps,
+          }
+        : agreement
           ? {
-              creatorCommissionBps: offer.creatorCommissionBps,
-              platformCommissionBps: offer.platformCommissionBps,
+              creatorCommissionBps: agreement.creatorEffectiveGmvBps,
+              platformCommissionBps: agreement.platformEffectiveGmvBps,
             }
-          : null);
+          : offer
+            ? {
+                creatorCommissionBps: offer.creatorCommissionBps,
+                platformCommissionBps: offer.platformCommissionBps,
+              }
+            : null;
       const commissionBase =
         orderStatus === OrderStatus.CANCELLED || orderStatus === OrderStatus.RETURNED
           ? 0
           : Math.max(0, (amountKopecks ?? 0) - returnedAmountKopecks);
+      const previewAmounts =
+        selected && bps
+          ? agreement
+            ? this.calculateAgreementAmounts(commissionBase, agreement)
+            : {
+                creator: this.calculateCommission(
+                  commissionBase,
+                  bps.creatorCommissionBps,
+                ),
+                platform: this.calculateCommission(
+                  commissionBase,
+                  bps.platformCommissionBps,
+                ),
+                total:
+                  this.calculateCommission(
+                    commissionBase,
+                    bps.creatorCommissionBps,
+                  ) +
+                  this.calculateCommission(
+                    commissionBase,
+                    bps.platformCommissionBps,
+                  ),
+              }
+          : { creator: 0, platform: 0, total: 0 };
       return {
         orderImportId,
         rowNumber: index + 2,
@@ -1003,18 +2053,30 @@ export class FinanceService {
         clickId: click?.id ?? null,
         offerId: offer?.id ?? null,
         attributedRelationshipId: selected?.relationship.id ?? null,
+        affiliateCommercialAgreementId:
+          existing?.affiliateCommercialAgreementId ?? agreement?.id ?? null,
         attributionSource: selected?.source ?? AttributionSource.UNATTRIBUTED,
         existingOrderId: existing?.id ?? null,
         creatorCommissionBpsSnapshot: bps?.creatorCommissionBps ?? null,
         platformCommissionBpsSnapshot: bps?.platformCommissionBps ?? null,
-        previewCreatorAmountKopecks:
-          selected && bps
-            ? this.calculateCommission(commissionBase, bps.creatorCommissionBps)
-            : 0,
-        previewPlatformAmountKopecks:
-          selected && bps
-            ? this.calculateCommission(commissionBase, bps.platformCommissionBps)
-            : 0,
+        totalCommissionPoolBpsSnapshot:
+          existing?.totalCommissionPoolBps ??
+          agreement?.totalCommissionPoolBps ??
+          null,
+        creatorPoolShareBpsSnapshot:
+          existing?.creatorPoolShareBps ?? agreement?.creatorPoolShareBps ?? null,
+        platformPoolShareBpsSnapshot:
+          existing?.platformPoolShareBps ??
+          agreement?.platformPoolShareBps ??
+          null,
+        commercialTermsVersionSnapshot:
+          existing?.commercialTermsVersionNumber ??
+          agreement?.commercialTermsVersionNumber ??
+          null,
+        calculationPolicySnapshot:
+          existing?.calculationPolicy ?? agreement?.calculationPolicy ?? null,
+        previewCreatorAmountKopecks: previewAmounts.creator,
+        previewPlatformAmountKopecks: previewAmounts.platform,
         errors,
         warnings,
         rawData: record,
@@ -1026,19 +2088,38 @@ export class FinanceService {
     tx: Prisma.TransactionClient,
     order: Order,
     eventId: string,
+    baseOverrideMinor?: bigint,
   ) {
     if (!order.affiliateRelationshipId) return;
     const relationship = await tx.affiliateRelationship.findUnique({
       where: { id: order.affiliateRelationshipId },
+      include: { commercialAgreement: true },
     });
     if (!relationship) throw new ConflictException('Партнёрская связь заказа не найдена');
+    if (
+      this.isStage7FinancialActivationEnabled() &&
+      (!relationship.commercialAgreement ||
+        order.affiliateCommercialAgreementId !==
+          relationship.commercialAgreement.id)
+    ) {
+      throw new ConflictException(
+        'Финансовый заказ должен использовать активное коммерческое соглашение',
+      );
+    }
     const current = await tx.commission.findUnique({ where: { orderId: order.id } });
-    const base =
-      order.status === OrderStatus.CANCELLED || order.status === OrderStatus.RETURNED
-        ? 0
-        : order.amountKopecks - order.returnedAmountKopecks;
-    const creatorTarget = this.calculateCommission(base, order.creatorCommissionBps);
-    const platformTarget = this.calculateCommission(base, order.platformCommissionBps);
+    const baseMinor = commissionBaseForSync(order, baseOverrideMinor);
+    const base = Number(baseMinor);
+    const targets = relationship.commercialAgreement
+      ? this.calculateAgreementAmounts(base, relationship.commercialAgreement)
+      : {
+          creator: this.calculateCommission(base, order.creatorCommissionBps),
+          platform: this.calculateCommission(base, order.platformCommissionBps),
+          total:
+            this.calculateCommission(base, order.creatorCommissionBps) +
+            this.calculateCommission(base, order.platformCommissionBps),
+        };
+    const creatorTarget = targets.creator;
+    const platformTarget = targets.platform;
     const shouldAccrue =
       order.status === OrderStatus.PAID ||
       order.status === OrderStatus.PARTIALLY_RETURNED;
@@ -1060,8 +2141,13 @@ export class FinanceService {
           offerId: order.offerId,
           creatorAmountKopecks: creatorTarget,
           platformAmountKopecks: platformTarget,
+          creatorAmountMinor: BigInt(creatorTarget),
+          platformAmountMinor: BigInt(platformTarget),
+          totalAmountMinor: BigInt(targets.total),
+          currency: order.currency,
           status,
           holdUntil: shouldAccrue ? holdUntil : null,
+          confirmedAt: shouldAccrue ? new Date() : null,
         },
       });
       if (shouldAccrue) {
@@ -1076,6 +2162,14 @@ export class FinanceService {
             metadata: { platformAmountKopecks: platformTarget },
           },
         });
+        await this.createAccrualTransaction(
+          tx,
+          order,
+          commission.id,
+          creatorTarget,
+          platformTarget,
+          `order:${order.id}:financial-accrual`,
+        );
       }
       return;
     }
@@ -1086,8 +2180,12 @@ export class FinanceService {
         data: {
           creatorAmountKopecks: creatorTarget,
           platformAmountKopecks: platformTarget,
+          creatorAmountMinor: BigInt(creatorTarget),
+          platformAmountMinor: BigInt(platformTarget),
+          totalAmountMinor: BigInt(targets.total),
           status: CommissionStatus.HOLD,
           holdUntil,
+          confirmedAt: new Date(),
         },
       });
       await tx.ledgerEntry.upsert({
@@ -1103,6 +2201,14 @@ export class FinanceService {
           metadata: { platformAmountKopecks: platformTarget },
         },
       });
+      await this.createAccrualTransaction(
+        tx,
+        order,
+        current.id,
+        creatorTarget,
+        platformTarget,
+        `order:${order.id}:financial-accrual`,
+      );
       return;
     }
 
@@ -1148,6 +2254,18 @@ export class FinanceService {
         },
       });
     }
+    const platformReversal = platformDelta < 0 ? -platformDelta : 0;
+    if (reversalAmount > 0 || platformReversal > 0) {
+      await this.createReversalTransaction(
+        tx,
+        order,
+        current.id,
+        reversalAmount,
+        platformReversal,
+        current.status === CommissionStatus.PAID,
+        `order:${order.id}:financial-reversal:${eventId}`,
+      );
+    }
     const postPayoutDebt =
       current.status === CommissionStatus.PAID && reversalAmount > 0
         ? current.debtAmountKopecks + reversalAmount
@@ -1160,6 +2278,16 @@ export class FinanceService {
             ? current.creatorAmountKopecks
             : creatorTarget,
         platformAmountKopecks: platformTarget,
+        creatorAmountMinor:
+          current.status === CommissionStatus.PAID
+            ? current.creatorAmountMinor
+            : BigInt(creatorTarget),
+        platformAmountMinor: BigInt(platformTarget),
+        totalAmountMinor:
+          current.status === CommissionStatus.PAID
+            ? (current.creatorAmountMinor ?? BigInt(current.creatorAmountKopecks)) +
+              BigInt(platformTarget)
+            : BigInt(creatorTarget + platformTarget),
         status:
           current.status === CommissionStatus.PAID
             ? CommissionStatus.PAID
@@ -1167,15 +2295,220 @@ export class FinanceService {
               ? CommissionStatus.REVERSED
               : current.status,
         debtAmountKopecks: postPayoutDebt,
+        recoverableAmountMinor: BigInt(postPayoutDebt),
         hasPostPayoutDebt: postPayoutDebt > 0,
       },
     });
   }
 
+  private calculateAgreementAmounts(
+    amountMinor: number | bigint,
+    agreement: {
+      calculationPolicy: CommercialCalculationPolicy;
+      totalCommissionPoolBps: number;
+      creatorPoolShareBps: number;
+      creatorEffectiveGmvBps: number;
+      platformEffectiveGmvBps: number;
+    },
+  ) {
+    const result = calculateFinancialAmounts(BigInt(amountMinor), agreement);
+    return {
+      total: this.toLegacyMoneyNumber(result.total),
+      creator: this.toLegacyMoneyNumber(result.creator),
+      platform: this.toLegacyMoneyNumber(result.platform),
+    };
+  }
+
+  private async createAccrualTransaction(
+    tx: Prisma.TransactionClient,
+    order: Order,
+    commissionId: string,
+    creatorAmount: number,
+    platformAmount: number,
+    eventKey: string,
+  ) {
+    const total = creatorAmount + platformAmount;
+    if (total <= 0) return;
+    await this.createBalancedTransaction(tx, {
+      type: LedgerTransactionType.ACCRUAL,
+      eventKey,
+      currency: order.currency,
+      orderId: order.id,
+      commissionId,
+      source: 'ORDER_STATUS',
+      postings: [
+        {
+          accountType: LedgerAccountType.BRAND_OBLIGATION,
+          ownerType: 'BrandProfile',
+          ownerId: order.brandId,
+          direction: LedgerPostingDirection.DEBIT,
+          amount: total,
+        },
+        {
+          accountType: LedgerAccountType.CREATOR_PAYABLE,
+          ownerType: 'CreatorProfile',
+          ownerId: (
+            await tx.commission.findUniqueOrThrow({
+              where: { id: commissionId },
+              select: { creatorId: true },
+            })
+          ).creatorId,
+          direction: LedgerPostingDirection.CREDIT,
+          amount: creatorAmount,
+        },
+        {
+          accountType: LedgerAccountType.PLATFORM_REVENUE,
+          ownerType: 'Platform',
+          ownerId: 'svyazka',
+          direction: LedgerPostingDirection.CREDIT,
+          amount: platformAmount,
+        },
+      ],
+    });
+  }
+
+  private async createReversalTransaction(
+    tx: Prisma.TransactionClient,
+    order: Order,
+    commissionId: string,
+    creatorAmount: number,
+    platformAmount: number,
+    postPayout: boolean,
+    eventKey: string,
+  ) {
+    const total = creatorAmount + platformAmount;
+    if (total <= 0) return;
+    const commission = await tx.commission.findUniqueOrThrow({
+      where: { id: commissionId },
+      select: { creatorId: true },
+    });
+    await this.createBalancedTransaction(tx, {
+      type: LedgerTransactionType.REVERSAL,
+      eventKey,
+      currency: order.currency,
+      orderId: order.id,
+      commissionId,
+      source: 'ORDER_RETURN_OR_CANCELLATION',
+      postings: [
+        {
+          accountType: postPayout
+            ? LedgerAccountType.CREATOR_RECOVERABLE
+            : LedgerAccountType.CREATOR_PAYABLE,
+          ownerType: 'CreatorProfile',
+          ownerId: commission.creatorId,
+          direction: LedgerPostingDirection.DEBIT,
+          amount: creatorAmount,
+        },
+        {
+          accountType: LedgerAccountType.PLATFORM_REVENUE,
+          ownerType: 'Platform',
+          ownerId: 'svyazka',
+          direction: LedgerPostingDirection.DEBIT,
+          amount: platformAmount,
+        },
+        {
+          accountType: LedgerAccountType.BRAND_OBLIGATION,
+          ownerType: 'BrandProfile',
+          ownerId: order.brandId,
+          direction: LedgerPostingDirection.CREDIT,
+          amount: total,
+        },
+      ],
+    });
+  }
+
+  private async createBalancedTransaction(
+    tx: Prisma.TransactionClient,
+    input: {
+      type: LedgerTransactionType;
+      eventKey: string;
+      currency: string;
+      orderId?: string;
+      commissionId?: string;
+      payoutId?: string;
+      statementId?: string;
+      source: string;
+      reason?: string;
+      postings: Array<{
+        accountType: LedgerAccountType;
+        ownerType: string;
+        ownerId: string;
+        direction: LedgerPostingDirection;
+        amount: number | bigint;
+      }>;
+    },
+  ) {
+    const existing = await tx.ledgerTransaction.findUnique({
+      where: { eventKey: input.eventKey },
+    });
+    if (existing) return existing;
+    const postings = input.postings.filter(
+      (posting) => BigInt(posting.amount) > 0n,
+    );
+    const debit = postings
+      .filter((posting) => posting.direction === LedgerPostingDirection.DEBIT)
+      .reduce((sum, posting) => sum + BigInt(posting.amount), 0n);
+    const credit = postings
+      .filter((posting) => posting.direction === LedgerPostingDirection.CREDIT)
+      .reduce((sum, posting) => sum + BigInt(posting.amount), 0n);
+    if (debit !== credit || debit <= 0n) {
+      throw new ConflictException('Ledger transaction is not balanced');
+    }
+    const accountIds: string[] = [];
+    for (const posting of postings) {
+      const account = await tx.ledgerAccount.upsert({
+        where: {
+          accountType_ownerType_ownerId_currency: {
+            accountType: posting.accountType,
+            ownerType: posting.ownerType,
+            ownerId: posting.ownerId,
+            currency: input.currency,
+          },
+        },
+        update: {},
+        create: {
+          accountType: posting.accountType,
+          ownerType: posting.ownerType,
+          ownerId: posting.ownerId,
+          currency: input.currency,
+        },
+      });
+      accountIds.push(account.id);
+    }
+    return tx.ledgerTransaction.create({
+      data: {
+        type: input.type,
+        eventKey: input.eventKey,
+        currency: input.currency,
+        orderId: input.orderId,
+        commissionId: input.commissionId,
+        payoutId: input.payoutId,
+        statementId: input.statementId,
+        source: input.source,
+        reason: input.reason,
+        requestId: this.audit.requestId(),
+        postings: {
+          create: postings.map((posting, index) => ({
+            accountId: accountIds[index],
+            direction: posting.direction,
+            amountMinor: BigInt(posting.amount),
+          })),
+        },
+      },
+    });
+  }
+
   private calculateCommission(amountKopecks: number, bps: number) {
-    const result = (BigInt(amountKopecks) * BigInt(bps) + 5_000n) / 10_000n;
-    if (result > 2_147_483_647n) throw new BadRequestException('Комиссия превышает лимит');
-    return Number(result);
+    return this.toLegacyMoneyNumber(
+      calculateBpsHalfUp(BigInt(amountKopecks), bps),
+    );
+  }
+
+  private toLegacyMoneyNumber(value: bigint) {
+    if (value > 2_147_483_647n) {
+      throw new BadRequestException('Комиссия превышает лимит');
+    }
+    return Number(value);
   }
 
   private isAllowedOrderTransition(
@@ -1218,6 +2551,24 @@ export class FinanceService {
   private parseOptionalKopecks(value?: string) {
     if (!value) return 0;
     return this.parseKopecks(value);
+  }
+
+  private parsePositiveBigInt(value: string, field: string) {
+    if (!/^[1-9]\d*$/.test(value)) {
+      throw new BadRequestException(
+        `${field} должен быть положительным целым числом`,
+      );
+    }
+    const parsed = BigInt(value);
+    if (parsed > 9_223_372_036_854_775_807n) {
+      throw new BadRequestException(`${field} превышает допустимый лимит`);
+    }
+    return parsed;
+  }
+
+  private singleCurrency(currencies: string[]) {
+    const unique = [...new Set(currencies)];
+    return unique.length === 1 ? unique[0] : unique.length === 0 ? null : 'MULTI';
   }
 
   private orderDateRange(query: Pick<ListFinanceQueryDto, 'dateFrom' | 'dateTo'>) {
@@ -1326,6 +2677,67 @@ export class FinanceService {
     return { items, pagination: { page, pageSize, totalItems } };
   }
 
+  private presentCreatorOrder(order: any): Record<string, unknown> {
+    const {
+      brandId: _brandId,
+      platformCommissionBps: _platformCommissionBps,
+      totalCommissionPoolBps: _totalCommissionPoolBps,
+      creatorPoolShareBps: _creatorPoolShareBps,
+      platformPoolShareBps: _platformPoolShareBps,
+      totalCommissionAmountMinor: _totalCommissionAmountMinor,
+      platformCommissionAmountMinor: _platformCommissionAmountMinor,
+      commercialTermsVersionNumber: _commercialTermsVersionNumber,
+      affiliateCommercialAgreementId: _affiliateCommercialAgreementId,
+      commission,
+      ...safeOrder
+    } = order;
+    return {
+      ...safeOrder,
+      creatorEffectiveBps: order.creatorCommissionBps,
+      creatorCommissionAmountMinor: order.creatorCommissionAmountMinor,
+      commission: commission
+        ? this.presentCreatorCommission(commission)
+        : null,
+    };
+  }
+
+  private presentCreatorCommission(
+    commission: any,
+  ): Record<string, unknown> {
+    const {
+      platformAmountKopecks: _platformAmountKopecks,
+      platformAmountMinor: _platformAmountMinor,
+      totalAmountMinor: _totalAmountMinor,
+      debtAmountKopecks: _debtAmountKopecks,
+      recoverableAmountMinor: _recoverableAmountMinor,
+      hasPostPayoutDebt: _hasPostPayoutDebt,
+      creator,
+      order,
+      payout,
+      ...safeCommission
+    } = commission;
+    return {
+      ...safeCommission,
+      creatorAmountMinor:
+        commission.creatorAmountMinor ??
+        BigInt(commission.creatorAmountKopecks),
+      offer: commission.offer,
+      order: order
+        ? this.presentCreatorOrder({ ...order, commission: null })
+        : undefined,
+      payout: payout
+        ? {
+            id: payout.id,
+            amountMinor: payout.amountKopecks,
+            currency: payout.currency,
+            status: payout.status,
+            createdAt: payout.createdAt,
+            paidAt: payout.paidAt,
+          }
+        : undefined,
+    };
+  }
+
   private emptyCreatorAnalytics(creatorId: string, creatorName: string) {
     return {
       creatorId,
@@ -1361,6 +2773,14 @@ export class FinanceService {
   private getPositiveInteger(key: string, fallback: number) {
     const value = Number(this.config.get<string>(key) ?? fallback);
     return Number.isInteger(value) && value > 0 ? value : fallback;
+  }
+
+  private isStage7FinancialActivationEnabled() {
+    return (
+      this.config.get<string>('STAGE7_FINANCE_ENABLED') === 'true' &&
+      this.config.get<string>('STAGE7_FINANCIAL_ACTIVATION_ENABLED') ===
+        'true'
+    );
   }
 
   private async getBrand(userId: string, activeBrandId?: string) {
