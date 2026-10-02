@@ -65,6 +65,68 @@ The deployment workflow is:
 
 The wrapper never runs a production seed and never removes Docker volumes.
 
+## Feature Flags
+
+Feature flags are controlled independently from application release
+activation. The production wrapper accepts only the following names:
+
+```text
+STAGE7_FINANCE_ENABLED
+STAGE7_FINANCIAL_ACTIVATION_ENABLED
+STAGE8_TRACKER_ENABLED
+STAGE8_TILDA_ENABLED
+STAGE8_ORDER_INGESTION_ENABLED
+STAGE8_ATTRIBUTION_SHADOW_ENABLED
+STAGE8_AUTO_ATTRIBUTION_ENABLED
+STAGE8_FINANCE_HANDOFF_ENABLED
+```
+
+To change one flag, use the exact full commit SHA reported by the active
+release preflight:
+
+```bash
+ssh svyazka-production \
+  svyazka-deployctl set-feature-flag FULL_ACTIVE_COMMIT_SHA STAGE8_TRACKER_ENABLED true
+```
+
+The command refuses stale commits, invalid values, unknown names, duplicate
+definitions, and any mutation outside the active release's
+`.env.production`. It writes the root-owned mode-600 file atomically,
+recreates only the backend container, and waits for backend readiness. If
+recreation or readiness fails, the previous environment is restored
+atomically and the backend is recreated with that previous configuration.
+The command logs only the flag name, value, and active commit.
+
+Rollback a flag by running the same command with its previous boolean value:
+
+```bash
+ssh svyazka-production \
+  svyazka-deployctl set-feature-flag FULL_ACTIVE_COMMIT_SHA STAGE8_TRACKER_ENABLED false
+```
+
+Changing a flag requires the exact active `COMMIT_SHA`; obtain it with
+`svyazka-deployctl preflight` immediately before the change. This command is
+for the eight allowlisted feature flags only. Do not use it for secrets,
+credentials, database URLs, or any other environment variable.
+
+`preflight` reports each allowlisted feature flag as `NAME=true`,
+`NAME=false`, or `NAME=ABSENT`; it does not print unrelated environment
+variables or secret values.
+
+The deploy key intentionally cannot replace the privileged wrapper. To
+bootstrap or update the root-owned `/usr/local/sbin/svyazka-deployctl`, use
+the VPS provider's authenticated web or serial console:
+
+1. Review the wrapper from the approved repository commit.
+2. Install it as `root:root` with mode `755` at
+   `/usr/local/sbin/svyazka-deployctl`.
+3. Run `bash -n` and a read-only `preflight` from the console.
+4. Verify the forced-command SSH gate and `sudo -n` policy still permit only
+   the wrapper.
+5. Re-run the access audit and a normal deployment preflight.
+
+There is intentionally no self-update command for `svyazka-deployctl`.
+
 ## Key Rotation
 
 Rotate at least annually and immediately after suspected workstation

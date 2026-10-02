@@ -6,6 +6,16 @@ readonly deploy_root="/opt/svyazka/deploy"
 readonly incoming_root="/var/lib/svyazka-deploy/incoming"
 readonly current_link="/opt/svyazka/current"
 readonly max_archive_bytes=$((512 * 1024 * 1024))
+readonly feature_flags=(
+  STAGE7_FINANCE_ENABLED
+  STAGE7_FINANCIAL_ACTIVATION_ENABLED
+  STAGE8_TRACKER_ENABLED
+  STAGE8_TILDA_ENABLED
+  STAGE8_ORDER_INGESTION_ENABLED
+  STAGE8_ATTRIBUTION_SHADOW_ENABLED
+  STAGE8_AUTO_ATTRIBUTION_ENABLED
+  STAGE8_FINANCE_HANDOFF_ENABLED
+)
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -52,6 +62,17 @@ require_release() {
   printf '%s\n' "$path"
 }
 
+active_release() {
+  local resolved releases_root_real
+  resolved="$(readlink -f "$current_link")"
+  releases_root_real="$(readlink -f "$releases_root")"
+  [[ "$resolved" == "$releases_root_real" || "$resolved" == "$releases_root_real"/* ]] ||
+    fail "active release is outside the releases root"
+  [[ -d "$resolved" ]] || fail "active release does not exist"
+  [[ -f "$resolved/COMMIT_SHA" ]] || fail "active release COMMIT_SHA is missing"
+  printf '%s\n' "$resolved"
+}
+
 compose_for() {
   local release="$1"
   COMPOSE=(
@@ -80,21 +101,149 @@ preflight() {
   printf 'ACTIVE_COMMIT='
   cat "$current_link/COMMIT_SHA"
   printf 'DISK_FREE_KB='
-  df -Pk /opt/svyazka | awk 'NR == 2 { print $4 }'
+  df -Pk "$releases_root" | awk 'NR == 2 { print $4 }'
   printf 'LIVE='
   /usr/bin/curl -fsS https://svyazka.pro/health/live
   printf '\nREADY='
   /usr/bin/curl -fsS https://svyazka.pro/health/ready
-  printf '\nFEATURE_FLAGS='
-  awk -F= '
-    /^(STAGE7_FINANCE_ENABLED|STAGE7_FINANCIAL_ACTIVATION_ENABLED)=/ {
-      print $1 "=" ($2 == "false" ? "false" : "NOT_FALSE")
-    }
-  ' "$current_link/.env.production" | sort | tr '\n' ' '
-  printf '\nCONTAINERS\n'
+  printf '\nFEATURE_FLAGS\n'
+  local flag value
+  for flag in "${feature_flags[@]}"; do
+    value="$(
+      awk -F= -v flag="$flag" '
+        $0 ~ "^[[:space:]]*" flag "[[:space:]]*=" {
+          candidate = $2
+          sub(/[[:space:]]+$/, "", candidate)
+          if (!seen && (candidate == "true" || candidate == "false")) {
+            print candidate
+            seen = 1
+          }
+        }
+      ' "$current_link/.env.production"
+    )"
+    if [[ "$value" == "true" || "$value" == "false" ]]; then
+      printf '%s=%s\n' "$flag" "$value"
+    else
+      printf '%s=ABSENT\n' "$flag"
+    fi
+  done
+  printf 'CONTAINERS\n'
   /usr/bin/docker ps \
     --filter name=svyazka-production \
     --format '{{.Names}}|{{.Status}}'
+}
+
+allowed_feature_flag() {
+  case "$1" in
+    STAGE7_FINANCE_ENABLED|\
+    STAGE7_FINANCIAL_ACTIVATION_ENABLED|\
+    STAGE8_TRACKER_ENABLED|\
+    STAGE8_TILDA_ENABLED|\
+    STAGE8_ORDER_INGESTION_ENABLED|\
+    STAGE8_ATTRIBUTION_SHADOW_ENABLED|\
+    STAGE8_AUTO_ATTRIBUTION_ENABLED|\
+    STAGE8_FINANCE_HANDOFF_ENABLED) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+read_active_commit() {
+  local release="$1"
+  local commit
+  commit="$(tr -d '\r\n' < "$release/COMMIT_SHA")"
+  valid_commit_sha "$commit" || fail "active release COMMIT_SHA is invalid"
+  printf '%s\n' "$commit"
+}
+
+wait_backend_ready() {
+  local attempt
+  for attempt in $(seq 1 30); do
+    if /usr/bin/curl -fsS https://svyazka.pro/health/ready >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+recreate_backend() {
+  local release="$1"
+  compose_for "$release"
+  if ! "${COMPOSE[@]}" up -d --no-deps --force-recreate backend >/dev/null; then
+    return 1
+  fi
+  wait_backend_ready
+}
+
+set_feature_flag() {
+  local expected_commit="$1"
+  local flag="$2"
+  local value="$3"
+  local release env_file active_commit old_file new_file count
+
+  valid_commit_sha "$expected_commit" || fail "invalid commit SHA"
+  allowed_feature_flag "$flag" || fail "feature flag is not allowed"
+  [[ "$value" == "true" || "$value" == "false" ]] ||
+    fail "feature flag value must be true or false"
+
+  release="$(active_release)"
+  env_file="$release/.env.production"
+  [[ -f "$env_file" ]] || fail "active release environment is missing"
+  active_commit="$(read_active_commit "$release")"
+  [[ "$expected_commit" == "$active_commit" ]] ||
+    fail "expected commit is not the active release"
+
+  count="$(
+    awk -v flag="$flag" '
+      $0 ~ "^[[:space:]]*" flag "[[:space:]]*=" { count++ }
+      END { print count + 0 }
+    ' "$env_file"
+  )"
+  [[ "$count" -le 1 ]] || fail "duplicate feature flag definition"
+
+  old_file="$(mktemp "$release/.env.production.previous.XXXXXX")"
+  new_file="$(mktemp "$release/.env.production.next.XXXXXX")"
+  trap 'rm -f "${new_file:-}" "${old_file:-}"' RETURN
+  install -m 600 -o root -g root "$env_file" "$old_file"
+
+  awk -v flag="$flag" -v value="$value" '
+    BEGIN { replaced = 0 }
+    $0 ~ "^[[:space:]]*" flag "[[:space:]]*=" {
+      if (!replaced) {
+        print flag "=" value
+        replaced = 1
+      }
+      next
+    }
+    { print }
+    END {
+      if (!replaced) print flag "=" value
+    }
+  ' "$env_file" > "$new_file"
+  chmod 600 "$new_file"
+  chown root:root "$new_file"
+  mv -f "$new_file" "$env_file"
+  new_file=""
+
+  if recreate_backend "$release"; then
+    rm -f "$old_file"
+    old_file=""
+    /usr/bin/logger -t svyazka-deployctl -- \
+      "feature_flag_update flag=$flag value=$value active_commit=$active_commit status=updated"
+    printf 'FEATURE_FLAG_UPDATED=%s=%s\n' "$flag" "$value"
+    return 0
+  fi
+
+  mv -f "$old_file" "$env_file"
+  old_file=""
+  if ! recreate_backend "$release"; then
+    /usr/bin/logger -t svyazka-deployctl -- \
+      "feature_flag_update flag=$flag value=$value active_commit=$active_commit status=rollback_failed"
+    fail "backend recovery failed after feature flag update"
+  fi
+  /usr/bin/logger -t svyazka-deployctl -- \
+    "feature_flag_update flag=$flag value=$value active_commit=$active_commit status=rolled_back"
+  fail "backend recreation/readiness failed; previous environment restored"
 }
 
 access_audit() {
@@ -284,6 +433,7 @@ usage() {
   cat >&2 <<'EOF'
 Usage:
   svyazka-deployctl preflight
+  svyazka-deployctl set-feature-flag EXPECTED_COMMIT FLAG true|false
   svyazka-deployctl access-audit
   svyazka-deployctl backup
   svyazka-deployctl upload ARCHIVE_NAME SHA256
@@ -309,6 +459,7 @@ shift
 
 case "$command" in
   preflight) [[ "$#" -eq 0 ]] || usage; preflight ;;
+  set-feature-flag) [[ "$#" -eq 3 ]] || usage; set_feature_flag "$@" ;;
   access-audit) [[ "$#" -eq 0 ]] || usage; access_audit ;;
   backup) [[ "$#" -eq 0 ]] || usage; backup ;;
   upload) [[ "$#" -eq 2 ]] || usage; upload "$@" ;;
