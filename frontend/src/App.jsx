@@ -2493,10 +2493,11 @@ function BrandTeamPanel({ managers, invitations, onInvite, onRevokeInvitation, o
   );
 }
 
-function BrandDashboard({ user, role, managerBrands, activeBrandId, onSelectManagerBrand, offers, applications, relationships, finance, orderImportPreview, initialTab = "offers", initialCreatorKitOfferId, initialCreatorKitFocus, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview, onSaveScenarios, onReload, transitionOffer, onUploadOrders, onConfirmOrders, canManageTeam, teamManagers, teamInvitations, onInviteManager, onRevokeInvitation, onRemoveManager, onChangeOfferManager, onChangeRelationshipManager }) {
+function BrandDashboard({ user, role, managerBrands, activeBrandId, onSelectManagerBrand, offers, applications, relationships, finance, orderImportPreview, initialTab = "offers", initialCreatorKitOfferId, initialCreatorKitFocus, updateApplication, transitionRelationship, replacePromoCode, confirmPromoCode, copyValue, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview, onSaveScenarios, onReload, transitionOffer, onUploadOrders, onConfirmOrders, canManageTeam, teamManagers, teamInvitations, onInviteManager, onRevokeInvitation, onRemoveManager, onChangeOfferManager, onChangeRelationshipManager }) {
   const [tab, setTab] = useState(initialTab);
   const [offerFilter, setOfferFilter] = useState("all");
   const [relationshipFilter, setRelationshipFilter] = useState("all");
+  const [promoDrafts, setPromoDrafts] = useState({});
   const isManager = role === "manager";
   const visibleOffers = isManager
     ? offers.filter((offer) => (
@@ -2688,7 +2689,7 @@ function BrandDashboard({ user, role, managerBrands, activeBrandId, onSelectMana
           </div>
           <div className="table-wrap">
             <table className="data-table">
-              <thead><tr><th>Креатор</th><th>Оффер</th><th>Промокод</th><th>Статус</th><th></th></tr></thead>
+              <thead><tr><th>Креатор</th><th>Оффер</th><th>Партнёрская ссылка</th><th>Промокод</th><th>Статус</th><th></th></tr></thead>
               <tbody>
                 {visibleRelationships.map((relationship) => (
                   <tr key={relationship.id}>
@@ -2701,13 +2702,58 @@ function BrandDashboard({ user, role, managerBrands, activeBrandId, onSelectMana
                         onChange={(managerId) => onChangeRelationshipManager(relationship.id, managerId)}
                       />
                     </td>
-                    <td><strong>{relationship.promoCode}</strong></td>
+                    <td>
+                      <span className="table-subtitle">{relationship.affiliateUrl}</span>
+                      <button className="button secondary small" type="button" disabled={!relationship.affiliateUrl} onClick={() => copyValue(relationship.affiliateUrl, "Партнёрская ссылка скопирована")}>Скопировать ссылку</button>
+                    </td>
+                    <td>
+                      <strong>{relationship.promoCode}</strong>
+                      <div className="row-actions">
+                        <button className="button secondary small" type="button" disabled={!relationship.promoCode} onClick={() => copyValue(relationship.promoCode, "Промокод скопирован")}>Скопировать промокод</button>
+                      </div>
+                      {relationship.promoCodeDetails && (
+                        <>
+                          <span className="table-subtitle">
+                            {relationship.promoCodeDetails.discountType === "PERCENT"
+                              ? `Скидка покупателю ${relationship.promoCodeDetails.discountBps / 100}%`
+                              : relationship.promoCodeDetails.discountType === "FIXED_AMOUNT"
+                                ? `Скидка покупателю ${moneyKopecks(relationship.promoCodeDetails.discountAmountMinor)}`
+                                : "Без скидки покупателю"}
+                          </span>
+                          <span className="table-subtitle">
+                            {relationship.promoCodeDetails.status === "ACTIVE"
+                              ? "Проверен реальным событием заказа"
+                              : relationship.promoCodeDetails.status === "PROVISIONING_CONFIRMED"
+                                ? "Добавление подтверждено, нужен тестовый заказ"
+                                : relationship.promoCodeDetails.status === "PENDING_PROVISIONING"
+                                  ? "Нужно добавить в Tilda"
+                                  : relationship.promoCodeDetails.status}
+                          </span>
+                        </>
+                      )}
+                      {role === "brand" && relationship.promoCodeDetails?.editable && (
+                        <div className="row-actions">
+                          <input
+                            className="field"
+                            value={promoDrafts[relationship.id] ?? relationship.promoCode}
+                            maxLength={40}
+                            onChange={(event) => setPromoDrafts((current) => ({ ...current, [relationship.id]: event.target.value }))}
+                            aria-label={`Новый промокод для ${relationship.creator.displayName}`}
+                          />
+                          <button className="button secondary small" type="button" onClick={async () => {
+                            const changed = await replacePromoCode(relationship.id, promoDrafts[relationship.id] ?? relationship.promoCode);
+                            if (changed) setPromoDrafts((current) => ({ ...current, [relationship.id]: changed.promoCode }));
+                          }}>Изменить до первого заказа</button>
+                        </div>
+                      )}
+                    </td>
                     <td><Status type={relationship.status === "ACTIVE" ? "success" : relationship.status === "REVOKED" ? "danger" : "pending"}>{relationshipStatusLabels[relationship.status]}</Status></td>
                     <td>
                       <div className="row-actions">
                         {relationship.status === "ACTIVE" && <button className="button secondary small" onClick={() => transitionRelationship(relationship.id, "pause")}>Приостановить</button>}
                         {relationship.status === "PAUSED" && <button className="button small" onClick={() => transitionRelationship(relationship.id, "activate")}>Активировать</button>}
                         {relationship.status !== "REVOKED" && <button className="button ghost small" onClick={() => transitionRelationship(relationship.id, "revoke")}>Отозвать</button>}
+                        {role === "brand" && relationship.promoCodeDetails?.status === "PENDING_PROVISIONING" && <button className="button small" type="button" onClick={() => confirmPromoCode(relationship.id)}>Код добавлен в Tilda</button>}
                       </div>
                     </td>
                   </tr>
@@ -4462,6 +4508,31 @@ function App() {
     }
   };
 
+  const replaceCreatorPromoCode = async (relationshipId, code) => {
+    try {
+      const relationship = await api(`/brand/affiliate-relationships/${relationshipId}/promo-code`, {
+        method: "PATCH",
+        body: JSON.stringify({ code })
+      });
+      await loadOffers("brand");
+      notify("Новый промокод сохранён");
+      return relationship;
+    } catch (error) {
+      notify(error.message);
+      return null;
+    }
+  };
+
+  const confirmCreatorPromoCode = async (relationshipId) => {
+    try {
+      await api(`/brand/affiliate-relationships/${relationshipId}/promo-code/confirm-tilda`, { method: "POST" });
+      await loadOffers("brand");
+      notify("Промокод отмечен как добавленный в Tilda");
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
   const copyValue = (value, message) => {
     if (navigator.clipboard) navigator.clipboard.writeText(value).catch(() => {});
     notify(message);
@@ -4815,9 +4886,9 @@ function App() {
       {page === "register" && <RegisterPage presetRole={registerRole} complete={completeRegistration} navigate={navigate} />}
       {page === "login" && <LoginPage login={login} verifyMfa={verifyMfa} navigate={navigate} />}
       {page === "creator" && role === "creator" && <CreatorDashboard user={user} applications={applications} relationships={relationships} offers={offers} finance={creatorFinance} cancelApplication={cancelApplication} copyValue={copyValue} navigate={navigate} />}
-      {page === "brand" && role === "brand" && <BrandDashboard user={user} role={role} managerBrands={[]} activeBrandId={null} onSelectManagerBrand={() => {}} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} initialTab={brandDashboardTarget.tab} initialCreatorKitOfferId={brandDashboardTarget.creatorKitOfferId} initialCreatorKitFocus={brandDashboardTarget.creatorKitFocus} updateApplication={updateApplication} transitionRelationship={transitionRelationship} onChangeRelationshipManager={changeRelationshipManager} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} onSaveScenarios={saveCreatorKitScenarios} onReload={() => loadOffers("brand")} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} canManageTeam teamManagers={teamManagers} teamInvitations={teamInvitations} onInviteManager={inviteManager} onRevokeInvitation={revokeInvitation} onRemoveManager={removeManager} />}
+      {page === "brand" && role === "brand" && <BrandDashboard user={user} role={role} managerBrands={[]} activeBrandId={null} onSelectManagerBrand={() => {}} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} initialTab={brandDashboardTarget.tab} initialCreatorKitOfferId={brandDashboardTarget.creatorKitOfferId} initialCreatorKitFocus={brandDashboardTarget.creatorKitFocus} updateApplication={updateApplication} transitionRelationship={transitionRelationship} replacePromoCode={replaceCreatorPromoCode} confirmPromoCode={confirmCreatorPromoCode} copyValue={copyValue} onChangeRelationshipManager={changeRelationshipManager} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} onSaveScenarios={saveCreatorKitScenarios} onReload={() => loadOffers("brand")} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} canManageTeam teamManagers={teamManagers} teamInvitations={teamInvitations} onInviteManager={inviteManager} onRevokeInvitation={revokeInvitation} onRemoveManager={removeManager} />}
       {["manager", "brand", "create"].includes(page) && role === "manager" && !activeBrandId && <ManagerBrandSelector brands={managerBrands} activeBrandId={activeBrandId} onSelect={selectManagerBrand} />}
-      {page === "brand" && role === "manager" && activeBrandId && <BrandDashboard user={brandDashboardUser} role={role} managerBrands={managerBrands} activeBrandId={activeBrandId} onSelectManagerBrand={selectManagerBrand} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} initialTab={brandDashboardTarget.tab} initialCreatorKitOfferId={brandDashboardTarget.creatorKitOfferId} initialCreatorKitFocus={brandDashboardTarget.creatorKitFocus} updateApplication={updateApplication} transitionRelationship={transitionRelationship} onChangeRelationshipManager={changeRelationshipManager} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} onSaveScenarios={saveCreatorKitScenarios} onReload={() => loadOffers("manager")} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} teamManagers={teamManagers} />}
+      {page === "brand" && role === "manager" && activeBrandId && <BrandDashboard user={brandDashboardUser} role={role} managerBrands={managerBrands} activeBrandId={activeBrandId} onSelectManagerBrand={selectManagerBrand} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} initialTab={brandDashboardTarget.tab} initialCreatorKitOfferId={brandDashboardTarget.creatorKitOfferId} initialCreatorKitFocus={brandDashboardTarget.creatorKitFocus} updateApplication={updateApplication} transitionRelationship={transitionRelationship} copyValue={copyValue} onChangeRelationshipManager={changeRelationshipManager} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} onSaveScenarios={saveCreatorKitScenarios} onReload={() => loadOffers("manager")} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} teamManagers={teamManagers} />}
       {page === "create" && ["brand", "manager"].includes(role) && (role !== "manager" || activeBrandId) && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} brandName={brandDashboardUser?.profile?.brandName} uploadAllowed={brandDashboardUser?.profile?.verificationStatus === "VERIFIED"} managers={teamManagers} onChangeOfferManager={changeOfferManager} />}
       {page === "admin" && role === "admin" && <AdminDashboard user={user} offers={offers} brands={adminBrands} operationalReadiness={operationalReadiness} finance={adminFinance} createPayout={createPayout} approvePayout={approvePayout} markPayoutPaid={markPayoutPaid} cancelPayout={cancelPayout} issueStatement={issueStatement} recordBrandPayment={recordBrandPayment} resolveDispute={resolveDispute} runReconciliation={runReconciliation} verifyBrand={verifyBrand} changeAdminPassword={changeAdminPassword} beginAdminMfa={beginAdminMfa} confirmAdminMfa={confirmAdminMfa} />}
       {toast && <div className="toast" role="status">{toast}</div>}
