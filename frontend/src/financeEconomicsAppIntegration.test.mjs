@@ -7,7 +7,8 @@ const appSource = readFileSync(new URL("./App.jsx", import.meta.url), "utf8");
 test("App.jsx imports the finance calculator used by the offer form", () => {
   assert.match(
     appSource,
-    /import \{ calculatePoolEconomics \} from "\.\/financeEconomics\.mjs";/
+    /import\s*\{\s*calculatePoolEconomics,\s*getApplicationUiState\s*\}\s*from "\.\/financeEconomics\.mjs";/
   );
   assert.match(appSource, /calculatePoolEconomics\(/);
+  assert.match(appSource, /getApplicationUiState\(/);
 });

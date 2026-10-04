@@ -22,7 +22,15 @@ import {
   PRODUCT_FACTS_PLACEHOLDER,
   formatOfferProductFacts
 } from "./offerProductFacts.mjs";
-import { calculatePoolEconomics } from "./financeEconomics.mjs";
+import {
+  calculatePoolEconomics,
+  getApplicationUiState
+} from "./financeEconomics.mjs";
+import {
+  countActiveApplications,
+  getAdminApplicationStatus,
+  getAdminCreatorStatus
+} from "./adminDirectory.mjs";
 
 const productImages = {
   skincare: "https://images.unsplash.com/photo-1556228578-8c89e6adf883?auto=format&fit=crop&w=1200&q=85",
