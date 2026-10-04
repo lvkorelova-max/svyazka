@@ -1792,6 +1792,7 @@ function SalesTrackingLive({ notify, preview, onUpload, onConfirm }) {
 function BrandCreatorKitManager({
   offers,
   relationships,
+  role,
   verificationStatus,
   initialOfferId,
   initialFocus,
@@ -1811,8 +1812,8 @@ function BrandCreatorKitManager({
   );
   const [preview, setPreview] = useState(false);
   const [previewSource, setPreviewSource] = useState("DRAFT");
-  const [previewProduct, setPreviewProduct] = useState("NOT_GRANTED");
-  const [previewAffiliate, setPreviewAffiliate] = useState("INACTIVE");
+  const [previewProduct, setPreviewProduct] = useState(role === "manager" ? "DIGITAL" : "NOT_GRANTED");
+  const [previewAffiliate, setPreviewAffiliate] = useState(role === "manager" ? "false" : "INACTIVE");
   const [previewCreatorId, setPreviewCreatorId] = useState("");
   const [previewKit, setPreviewKit] = useState(null);
   const [scenarioDrafts, setScenarioDrafts] = useState([]);
@@ -1895,6 +1896,18 @@ function BrandCreatorKitManager({
 
   const loadPreview = async () => {
     if (!selectedOffer) return;
+    if (role === "manager") {
+      try {
+        const nextKit = await onLoadPreview(selectedOffer.id, previewProduct, {
+          source: previewSource,
+          affiliateApproved: previewAffiliate === "true"
+        });
+        setPreviewKit(nextKit);
+      } catch (error) {
+        notify(error.message);
+      }
+      return;
+    }
     if (!previewCreatorId) {
       notify("Сначала одобрите заявку креатора и выберите его для предпросмотра");
       return;
@@ -2162,9 +2175,18 @@ function BrandCreatorKitManager({
         </div>
         <div className="brand-kit-toolbar preview-controls">
           <div className="form-group"><label className="form-label">Версия</label><select className="select-field" value={previewSource} onChange={(event) => setPreviewSource(event.target.value)}><option value="DRAFT">Текущий черновик</option><option value="PUBLISHED">Опубликованная версия</option></select></div>
-          <div className="form-group"><label className="form-label">Креатор</label><select className="select-field" value={previewCreatorId} onChange={(event) => setPreviewCreatorId(event.target.value)}><option value="">Выберите креатора</option>{relevantCreators.map((creator) => <option value={creator.id} key={creator.id}>{creator.displayName}</option>)}</select></div>
-          <div className="form-group"><label className="form-label">Product Access</label><select className="select-field" value={previewProduct} onChange={(event) => setPreviewProduct(event.target.value)}><option value="NOT_GRANTED">Нет</option><option value="GRANTED">Есть</option>{previewCreatorId && <option value="ACTUAL">Фактический</option>}</select></div>
-          <div className="form-group"><label className="form-label">Affiliate approval</label><select className="select-field" value={previewAffiliate} onChange={(event) => setPreviewAffiliate(event.target.value)}><option value="INACTIVE">Нет</option><option value="ACTIVE">Есть</option>{previewCreatorId && <option value="ACTUAL">Фактический</option>}</select></div>
+          {role === "brand" ? (
+            <>
+              <div className="form-group"><label className="form-label">Креатор</label><select className="select-field" value={previewCreatorId} onChange={(event) => setPreviewCreatorId(event.target.value)}><option value="">Выберите креатора</option>{relevantCreators.map((creator) => <option value={creator.id} key={creator.id}>{creator.displayName}</option>)}</select></div>
+              <div className="form-group"><label className="form-label">Product Access</label><select className="select-field" value={previewProduct} onChange={(event) => setPreviewProduct(event.target.value)}><option value="NOT_GRANTED">Нет</option><option value="GRANTED">Есть</option>{previewCreatorId && <option value="ACTUAL">Фактический</option>}</select></div>
+              <div className="form-group"><label className="form-label">Affiliate approval</label><select className="select-field" value={previewAffiliate} onChange={(event) => setPreviewAffiliate(event.target.value)}><option value="INACTIVE">Нет</option><option value="ACTIVE">Есть</option>{previewCreatorId && <option value="ACTUAL">Фактический</option>}</select></div>
+            </>
+          ) : (
+            <>
+              <div className="form-group"><label className="form-label">Уровень доступа</label><select className="select-field" value={previewProduct} onChange={(event) => setPreviewProduct(event.target.value)}><option value="DIGITAL">Digital Access</option><option value="PRODUCT">Product Access</option></select></div>
+              <div className="form-group"><label className="form-label">Affiliate approval</label><select className="select-field" value={previewAffiliate} onChange={(event) => setPreviewAffiliate(event.target.value)}><option value="false">Нет</option><option value="true">Есть</option></select></div>
+            </>
+          )}
         </div>
         </>
       )}
@@ -2631,7 +2653,7 @@ function BrandDashboard({ user, role, managerBrands, activeBrandId, onSelectMana
       )}
 
       {tab === "tracking" && <SalesTrackingLive notify={notify} preview={orderImportPreview} onUpload={onUploadOrders} onConfirm={onConfirmOrders} />}
-      {tab === "creatorKit" && <BrandCreatorKitManager offers={offers} relationships={relationships} verificationStatus={user?.profile?.verificationStatus} initialOfferId={initialCreatorKitOfferId} initialFocus={initialCreatorKitFocus} notify={notify} onToggleAsset={onToggleAsset} onDownloadAsset={onDownloadAsset} onUploadAsset={onUploadAsset} onLoadPreview={onLoadPreview} onSaveScenarios={onSaveScenarios} onReload={onReload} />}
+      {tab === "creatorKit" && <BrandCreatorKitManager offers={offers} relationships={relationships} role={role} verificationStatus={user?.profile?.verificationStatus} initialOfferId={initialCreatorKitOfferId} initialFocus={initialCreatorKitFocus} notify={notify} onToggleAsset={onToggleAsset} onDownloadAsset={onDownloadAsset} onUploadAsset={onUploadAsset} onLoadPreview={onLoadPreview} onSaveScenarios={onSaveScenarios} onReload={onReload} />}
     </DashboardLayout>
   );
 }
@@ -4632,8 +4654,13 @@ function App() {
     }
   };
 
-  const loadCreatorKitPreview = async (offerId, access) => {
-    const kit = await api(`/brand/offers/${offerId}/creator-kit/preview?accessLevel=${access.toUpperCase()}`);
+  const loadCreatorKitPreview = async (offerId, access = "DIGITAL", options = {}) => {
+    const params = new URLSearchParams({
+      accessLevel: access.toUpperCase(),
+      source: options.source === "PUBLISHED" ? "PUBLISHED" : "DRAFT",
+      affiliateApproved: options.affiliateApproved === false ? "false" : "true"
+    });
+    const kit = await api(`/brand/offers/${offerId}/creator-kit/preview?${params.toString()}`);
     const offer = offers.find((item) => item.id === offerId);
     return mapCreatorKit(kit, offer);
   };

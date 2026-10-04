@@ -381,6 +381,28 @@ describe('Manager access and responsibility end-to-end', () => {
       .expect(201);
     expect(published.body.revision.status).toBe('PUBLISHED');
 
+    await request(app.getHttpServer())
+      .get(`/api/brand/offers/${revisionOfferId}/creator-kit/preview?accessLevel=DIGITAL&source=PUBLISHED&affiliateApproved=false`)
+      .set(auth(brandAToken))
+      .expect(200);
+    await request(app.getHttpServer())
+      .get(`/api/brand/offers/${revisionOfferId}/creator-kit/preview?accessLevel=DIGITAL&source=PUBLISHED&affiliateApproved=false`)
+      .set(managerHeaders(annaToken, brandAId))
+      .expect(200);
+    await request(app.getHttpServer())
+      .get(`/api/brand/offers/${revisionOfferId}/creator-kit/preview?accessLevel=DIGITAL`)
+      .set(auth(annaToken))
+      .expect(403);
+    await request(app.getHttpServer())
+      .get(`/api/brand/offers/${revisionOfferId}/creator-kit/preview?accessLevel=DIGITAL`)
+      .set(managerHeaders(mariaToken, brandBId))
+      .expect(403);
+    await request(app.getHttpServer())
+      .post(`/api/brand/offers/${revisionOfferId}/creator-kit/preview-as-creator`)
+      .set(managerHeaders(annaToken, brandAId))
+      .send({ source: 'PUBLISHED', creatorId: charlieId })
+      .expect(403);
+
     const creatorKit = await request(app.getHttpServer())
       .get(`/api/creator/offers/${revisionOfferId}/creator-kit`)
       .set(auth(creatorToken))
