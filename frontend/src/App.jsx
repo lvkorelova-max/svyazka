@@ -5,6 +5,10 @@ import {
   setAccessToken,
   setActiveBrandId as setApiActiveBrandId
 } from "./api/client";
+import {
+  COMMISSION_FILTERS,
+  matchesCommissionFilter
+} from "./commissionFilter.mjs";
 
 const productImages = {
   skincare: "https://images.unsplash.com/photo-1556228578-8c89e6adf883?auto=format&fit=crop&w=1200&q=85",
