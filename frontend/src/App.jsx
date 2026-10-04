@@ -1878,6 +1878,7 @@ function BrandCreatorKitManager({
   }, [editor, initialFocus, selectedOffer, uploadFocused]);
 
   const updateUpload = (key, value) => setUploadForm((current) => ({ ...current, [key]: value }));
+  const resetEditor = (sourceKit) => setEditor(sourceKit);
 
   useEffect(() => {
     const loadedScenarios = selectedOffer?.creatorKitScenariosLoaded && Array.isArray(selectedOffer.creatorKit?.scenarios);
@@ -1892,7 +1893,7 @@ function BrandCreatorKitManager({
     })) : []);
   }, [selectedOffer?.id, selectedOffer?.creatorKitScenariosLoaded, selectedOffer?.creatorKit?.scenarios]);
 
-  const loadPreview = async (access = previewAccess) => {
+  const loadPreview = async () => {
     if (!selectedOffer) return;
     if (!previewCreatorId) {
       notify("Сначала одобрите заявку креатора и выберите его для предпросмотра");
@@ -1918,8 +1919,6 @@ function BrandCreatorKitManager({
     if (!selectedOffer?.creatorKit) return;
     resetEditor(selectedOffer.creatorKit);
     setPreviewKit(null);
-    setRestoreDetails(null);
-    loadMetadata(selectedOffer.id).catch((error) => notify(error.message));
   }, [selectedOffer?.id, selectedOffer?.creatorKit?.revision?.id]);
 
   useEffect(() => {
@@ -1934,65 +1933,6 @@ function BrandCreatorKitManager({
 
   const refresh = async () => {
     await onReload();
-    if (selectedOffer) await loadMetadata(selectedOffer.id);
-  };
-
-  const updateEditor = (key, value) => setEditor((current) => ({ ...current, [key]: value }));
-  const lines = (value) => String(value || "").split("\n").map((item) => item.trim()).filter(Boolean);
-
-  const saveContent = async () => {
-    if (!selectedOffer || !editor) return;
-    setSaving(true);
-    try {
-      await api(`/brand/offers/${selectedOffer.id}/creator-kit`, {
-        method: "PUT",
-        body: JSON.stringify({
-          brandContent: {
-            description: editor.brandDescription,
-            history: editor.brandHistory,
-            values: lines(editor.brandValues),
-            positioning: editor.brandPositioning,
-            accessLevel: editor.brandAccessLevel,
-            requiresAffiliateApproval: editor.brandAffiliate
-          },
-          productContent: {
-            description: editor.productDescription,
-            benefits: lines(editor.productBenefits),
-            usageInstructions: editor.usageInstructions,
-            accessLevel: editor.productAccessLevel,
-            requiresAffiliateApproval: editor.productAffiliate
-          },
-          facts: editor.facts.filter((item) => item.value.trim()).map((item, index) => ({
-            type: item.type,
-            value: item.value,
-            accessLevel: item.accessLevel || "DIGITAL",
-            requiresAffiliateApproval: Boolean(item.requiresAffiliateApproval),
-            sortOrder: index
-          })),
-          claims: [
-            ...lines(editor.allowedClaims).map((value, index) => ({ type: "ALLOWED", value, accessLevel: "DIGITAL", requiresAffiliateApproval: false, sortOrder: index })),
-            ...lines(editor.forbiddenClaims).map((value, index) => ({ type: "FORBIDDEN", value, accessLevel: "DIGITAL", requiresAffiliateApproval: false, sortOrder: index }))
-          ],
-          rules: lines(editor.rules).map((value, index) => ({ value, accessLevel: "DIGITAL", requiresAffiliateApproval: false, sortOrder: index })),
-          publicationRequirements: {
-            mandatoryMentions: lines(editor.mandatoryMentions),
-            advertisingLabel: editor.advertisingLabel || undefined,
-            hashtags: editor.hashtags.split(/\s+/).filter(Boolean),
-            brandMention: editor.brandMention || undefined,
-            approvalRequired: editor.approvalRequired,
-            allowedPlatforms: lines(editor.allowedPlatforms),
-            accessLevel: editor.publicationAccessLevel,
-            requiresAffiliateApproval: editor.publicationAffiliate
-          }
-        })
-      });
-      await refresh();
-      notify("Черновик Creator Kit сохранён");
-    } catch (error) {
-      notify(error.message);
-    } finally {
-      setSaving(false);
-    }
   };
 
   const saveScenario = async () => {
@@ -2059,68 +1999,6 @@ function BrandCreatorKitManager({
         body: JSON.stringify({ scenarioIds: ids })
       });
       await refresh();
-    } catch (error) {
-      notify(error.message);
-    }
-  };
-
-  const publishKit = async () => {
-    try {
-      await api(`/brand/offers/${selectedOffer.id}/creator-kit/publish`, {
-        method: "POST",
-        body: JSON.stringify({ publisherNote: "Публикация из кабинета бренда" })
-      });
-      await refresh();
-      notify("Новая версия Creator Kit опубликована");
-    } catch (error) {
-      notify(error.message);
-    }
-  };
-
-  const createDraftFromRevision = async (revisionId) => {
-    try {
-      await api(`/brand/offers/${selectedOffer.id}/creator-kit/revisions/${revisionId}/create-draft`, { method: "POST" });
-      await refresh();
-      notify("Черновик создан из выбранной версии");
-    } catch (error) {
-      notify(error.message);
-    }
-  };
-
-  const previewRestore = async (revisionId) => {
-    try {
-      const details = await api(`/brand/offers/${selectedOffer.id}/creator-kit/revisions/${revisionId}/restore-preview`);
-      setRestoreDetails(details);
-    } catch (error) {
-      notify(error.message);
-    }
-  };
-
-  const restoreRevision = async () => {
-    if (!restoreDetails) return;
-    const confirmed = window.confirm(`Будет активирована новая ревизия на основе v${restoreDetails.targetRevision.revisionNumber}. ${restoreDetails.diff.summary}. Продолжить?`);
-    if (!confirmed) return;
-    try {
-      await api(`/brand/offers/${selectedOffer.id}/creator-kit/revisions/${restoreDetails.targetRevision.id}/restore`, {
-        method: "POST",
-        body: JSON.stringify({ expectedActiveRevisionId: restoreDetails.activeRevision.id, publisherNote: "Восстановление из истории" })
-      });
-      setRestoreDetails(null);
-      await refresh();
-      notify("Историческая версия восстановлена новой ревизией");
-    } catch (error) {
-      notify(error.message);
-    }
-  };
-
-  const changeProductAccess = async (creatorId, active) => {
-    try {
-      await api(`/brand/offers/${selectedOffer.id}/product-access/${creatorId}/${active ? "revoke" : "grant"}`, {
-        method: "POST",
-        body: JSON.stringify({ reason: active ? "Отозвано брендом" : "Ручной Product Access для закрытого пилота" })
-      });
-      await loadMetadata(selectedOffer.id);
-      notify(active ? "Product Access отозван" : "Product Access выдан");
     } catch (error) {
       notify(error.message);
     }
