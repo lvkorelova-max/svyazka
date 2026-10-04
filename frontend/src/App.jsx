@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   api,
+  getPublicBackendOrigin,
   restoreSession,
   setAccessToken,
   setActiveBrandId as setApiActiveBrandId
@@ -26,6 +27,10 @@ import {
   calculatePoolEconomics,
   getApplicationUiState
 } from "./financeEconomics.mjs";
+import {
+  buildTrackerInstallationPayload,
+  trackerScriptSnippet
+} from "./trackingIntegration.mjs";
 import {
   countActiveApplications,
   getAdminApplicationStatus,
@@ -1695,9 +1700,86 @@ function SalesTracking({ notify }) {
   );
 }
 
-function SalesTrackingLive({ notify, preview, onUpload, onConfirm }) {
+function SalesTrackingLive({ role, notify, preview, onUpload, onConfirm }) {
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [installations, setInstallations] = useState([]);
+  const [trackerForm, setTrackerForm] = useState({
+    name: "",
+    primaryDomain: "",
+    allowedOrigins: "",
+    consentMode: "REQUIRED"
+  });
+  const [trackerSecret, setTrackerSecret] = useState(null);
+  const [trackerSnippet, setTrackerSnippet] = useState("");
+  const [trackerBusy, setTrackerBusy] = useState(false);
+
+  const loadInstallations = async () => {
+    if (role !== "brand") return;
+    try {
+      setInstallations(await api("/brand/tracker-installations"));
+    } catch (error) {
+      notify(error.message);
+    }
+  };
+
+  useEffect(() => {
+    if (role === "brand") {
+      loadInstallations();
+    } else {
+      setInstallations([]);
+      setTrackerSecret(null);
+      setTrackerSnippet("");
+    }
+  }, [role]);
+
+  const createTrackerInstallation = async (event) => {
+    event.preventDefault();
+    setTrackerBusy(true);
+    setTrackerSecret(null);
+    try {
+      const created = await api("/brand/tracker-installations", {
+        method: "POST",
+        body: JSON.stringify(buildTrackerInstallationPayload(trackerForm))
+      });
+      const { webhookSecret, ...installation } = created;
+      setTrackerSecret(webhookSecret);
+      setTrackerSnippet(trackerScriptSnippet(installation.publicKey, getPublicBackendOrigin()));
+      setInstallations((current) => [installation, ...current]);
+      notify("Установка tracker создана. Сохраните секрет сейчас.");
+    } catch (error) {
+      notify(error.message);
+    } finally {
+      setTrackerBusy(false);
+    }
+  };
+
+  const activateTrackerInstallation = async (installationId) => {
+    setTrackerBusy(true);
+    try {
+      const updated = await api(`/brand/tracker-installations/${installationId}/activate`, { method: "POST" });
+      setInstallations((current) => current.map((item) => item.id === updated.id ? { ...item, ...updated } : item));
+      notify("Установка tracker активирована");
+    } catch (error) {
+      notify(error.message);
+    } finally {
+      setTrackerBusy(false);
+    }
+  };
+
+  const rotateTrackerSecret = async (installationId) => {
+    setTrackerBusy(true);
+    setTrackerSecret(null);
+    try {
+      const rotated = await api(`/brand/tracker-installations/${installationId}/rotate-secret`, { method: "POST" });
+      setTrackerSecret(rotated.webhookSecret);
+      notify("Секрет обновлён. Сохраните его сейчас.");
+    } catch (error) {
+      notify(error.message);
+    } finally {
+      setTrackerBusy(false);
+    }
+  };
 
   const downloadTemplate = () => {
     const content = [
@@ -1727,18 +1809,70 @@ function SalesTrackingLive({ notify, preview, onUpload, onConfirm }) {
     <div className="tracking-page">
       <section className="tracking-overview">
         <div className="tracking-overview-copy">
-          <span className="eyebrow">Рабочий способ этапа 4</span>
-          <h2>Ручной импорт заказов через CSV</h2>
-          <p>Сначала сервер проверяет строки и показывает предпросмотр. Рабочие заказы создаются только после подтверждения брендом.</p>
+          <span className="eyebrow">Stage 8</span>
+          <h2>Передача заказов и атрибуция продаж</h2>
+          <p>{role === "brand" ? "Настройте tracker для сайта или загрузите подтверждённые заказы через CSV. Сервер проверяет данные до их обработки." : "Загрузите подтверждённые заказы через CSV. Сервер проверяет данные до их обработки."}</p>
         </div>
         <Status type={preview?.status === "IMPORTED" ? "success" : preview ? "pending" : ""}>
           {preview?.status === "IMPORTED" ? "Импортировано" : preview ? "Готово к проверке" : "Файл не загружен"}
         </Status>
       </section>
 
+      {role === "brand" && (
+        <section className="tracking-section">
+          <div className="tracking-section-head">
+            <div>
+              <span className="tracking-number">01</span>
+              <h2>JavaScript tracker</h2>
+              <p>Создайте установку для домена магазина. Секрет показывается только сразу после создания или ротации.</p>
+            </div>
+          </div>
+          <form className="panel-body form-grid" onSubmit={createTrackerInstallation}>
+            <div className="form-group"><label className="form-label">Название установки</label><input className="field" required value={trackerForm.name} onChange={(event) => setTrackerForm((current) => ({ ...current, name: event.target.value }))} /></div>
+            <div className="form-group"><label className="form-label">Основной домен</label><input className="field" required placeholder="shop.example.com" value={trackerForm.primaryDomain} onChange={(event) => setTrackerForm((current) => ({ ...current, primaryDomain: event.target.value }))} /></div>
+            <div className="form-group full"><label className="form-label">Разрешённые origins</label><input className="field" required placeholder="https://shop.example.com" value={trackerForm.allowedOrigins} onChange={(event) => setTrackerForm((current) => ({ ...current, allowedOrigins: event.target.value }))} /><small className="stat-note">Укажите HTTPS origins через запятую.</small></div>
+            <div className="form-group"><label className="form-label">Consent mode</label><select className="select-field" value={trackerForm.consentMode} onChange={(event) => setTrackerForm((current) => ({ ...current, consentMode: event.target.value }))}><option value="REQUIRED">REQUIRED</option><option value="ASSUMED_BY_BRAND">ASSUMED_BY_BRAND</option><option value="SESSION_ONLY">SESSION_ONLY</option></select></div>
+            <div className="form-actions full"><button className="button" type="submit" disabled={trackerBusy}>{trackerBusy ? "Сохраняем…" : "Создать установку"}</button></div>
+          </form>
+
+          {!!trackerSecret && (
+            <div className="creator-warning compact-warning">
+              <span className="warning-mark">!</span>
+              <strong>Секрет показан один раз. Скопируйте его сейчас и не публикуйте в браузерном коде.</strong>
+              <code>{trackerSecret}</code>
+            </div>
+          )}
+          {!!trackerSnippet && (
+            <div className="code-block">
+              <div className="code-block-head"><span>Установка tracker</span><span>JavaScript</span></div>
+              <pre>{trackerSnippet}</pre>
+            </div>
+          )}
+
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Установка</th><th>Домен</th><th>Статус</th><th>Здоровье</th><th></th></tr></thead>
+              <tbody>{installations.map((installation) => (
+                <tr key={installation.id}>
+                  <td><strong>{installation.name}</strong><span className="table-subtitle">{installation.publicKey}</span><code>{trackerScriptSnippet(installation.publicKey, getPublicBackendOrigin())}</code></td>
+                  <td>{installation.primaryDomain}</td>
+                  <td><Status type={installation.status === "ACTIVE" ? "success" : "pending"}>{installation.status}</Status></td>
+                  <td>{installation.healthStatus || "—"}</td>
+                  <td><div className="row-actions">
+                    {installation.status !== "ACTIVE" && <button className="button small" type="button" disabled={trackerBusy} onClick={() => activateTrackerInstallation(installation.id)}>Активировать</button>}
+                    <button className="button secondary small" type="button" disabled={trackerBusy} onClick={() => { setTrackerSnippet(trackerScriptSnippet(installation.publicKey, getPublicBackendOrigin())); rotateTrackerSecret(installation.id); }}>Ротировать секрет</button>
+                  </div></td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+          {!installations.length && <div className="empty-state">Установки tracker ещё не созданы.</div>}
+        </section>
+      )}
+
       <section className="tracking-section">
         <div className="tracking-section-head">
-          <div><span className="tracking-number">01</span><h2>Импорт и предпросмотр</h2><p>Поддерживаются статусы pending, paid, cancelled, returned и partially_returned.</p></div>
+            <div><span className="tracking-number">{role === "brand" ? "02" : "01"}</span><h2>Импорт и предпросмотр CSV</h2><p>Поддерживаются статусы pending, paid, cancelled, returned и partially_returned.</p></div>
         </div>
         <div className="csv-toolbar">
           <button className="button secondary" onClick={downloadTemplate}>Скачать шаблон</button>
@@ -1754,7 +1888,7 @@ function SalesTrackingLive({ notify, preview, onUpload, onConfirm }) {
       {preview && (
         <section className="tracking-section">
           <div className="tracking-section-head">
-            <div><span className="tracking-number">02</span><h2>Предпросмотр заказов</h2><p>Валидные строки: {preview.validRows}; ошибки и конфликты: {preview.invalidRows}; дубли: {preview.duplicateRows}.</p></div>
+            <div><span className="tracking-number">{role === "brand" ? "03" : "02"}</span><h2>Предпросмотр заказов</h2><p>Валидные строки: {preview.validRows}; ошибки и конфликты: {preview.invalidRows}; дубли: {preview.duplicateRows}.</p></div>
             <button className="button" disabled={preview.status !== "READY" || preview.validRows === 0} onClick={() => onConfirm(preview.id)}>Подтвердить импорт</button>
           </div>
           <div className="table-wrap">
@@ -1783,7 +1917,7 @@ function SalesTrackingLive({ notify, preview, onUpload, onConfirm }) {
 
       <div className="creator-warning compact-warning">
         <span className="warning-mark">i</span>
-        <strong>JavaScript tracker, Server-to-server API и CMS-интеграции пока не подключены. На этапе 4 рабочим способом передачи заказов является CSV.</strong>
+        <strong>Установки tracker и CSV используют серверную проверку. Подключение Tilda и signed server-to-server API на этом экране пока не настраивается.</strong>
       </div>
     </div>
   );
@@ -2652,7 +2786,7 @@ function BrandDashboard({ user, role, managerBrands, activeBrandId, onSelectMana
         </div>
       )}
 
-      {tab === "tracking" && <SalesTrackingLive notify={notify} preview={orderImportPreview} onUpload={onUploadOrders} onConfirm={onConfirmOrders} />}
+      {tab === "tracking" && <SalesTrackingLive role={role} notify={notify} preview={orderImportPreview} onUpload={onUploadOrders} onConfirm={onConfirmOrders} />}
       {tab === "creatorKit" && <BrandCreatorKitManager offers={offers} relationships={relationships} role={role} verificationStatus={user?.profile?.verificationStatus} initialOfferId={initialCreatorKitOfferId} initialFocus={initialCreatorKitFocus} notify={notify} onToggleAsset={onToggleAsset} onDownloadAsset={onDownloadAsset} onUploadAsset={onUploadAsset} onLoadPreview={onLoadPreview} onSaveScenarios={onSaveScenarios} onReload={onReload} />}
     </DashboardLayout>
   );

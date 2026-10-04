@@ -1,8 +1,15 @@
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+const API_URL = import.meta.env?.VITE_API_URL || 'http://localhost:3000/api';
 
 let accessToken = null;
 let activeBrandId = null;
 let refreshPromise = null;
+
+export function getPublicBackendOrigin(
+  locationOrigin = window.location.origin,
+  apiUrl = API_URL,
+) {
+  return new URL(apiUrl, locationOrigin).origin;
+}
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
   const controller = new AbortController();
