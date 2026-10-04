@@ -9,6 +9,19 @@ import {
   COMMISSION_FILTERS,
   matchesCommissionFilter
 } from "./commissionFilter.mjs";
+import {
+  OFFER_CATEGORY_OTHER,
+  OFFER_CATEGORY_PRESETS,
+  getOfferCategorySelectValue
+} from "./offerCategories.mjs";
+import {
+  getOfferPreviewImage,
+  validateOfferImageFile
+} from "./offerImage.mjs";
+import {
+  PRODUCT_FACTS_PLACEHOLDER,
+  formatOfferProductFacts
+} from "./offerProductFacts.mjs";
 
 const productImages = {
   skincare: "https://images.unsplash.com/photo-1556228578-8c89e6adf883?auto=format&fit=crop&w=1200&q=85",
@@ -1750,7 +1763,20 @@ function SalesTrackingLive({ notify, preview, onUpload, onConfirm }) {
   );
 }
 
-function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview, onSaveScenarios }) {
+function BrandCreatorKitManager({
+  offers,
+  relationships,
+  verificationStatus,
+  initialOfferId,
+  initialFocus,
+  notify,
+  onToggleAsset,
+  onDownloadAsset,
+  onUploadAsset,
+  onLoadPreview,
+  onSaveScenarios,
+  onReload
+}) {
   const brandOffers = offers;
   const [selectedOfferId, setSelectedOfferId] = useState(
     brandOffers.some((offer) => offer.id === initialOfferId)
@@ -2177,7 +2203,7 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
               </div>
             )}
           </section>
-          <form className="creator-kit-upload panel" onSubmit={submitUpload}>
+          <form id="creator-kit-assets-upload" className="creator-kit-upload panel" onSubmit={submitUpload}>
           <div className="panel-header"><div><h2>Добавить материал</h2><p>Файл загружается напрямую в приватное хранилище и подтверждается сервером.</p></div></div>
           {initialFocus === "assets" && (
             <div className="creator-kit-upload-arrival" role="status">
@@ -2216,7 +2242,7 @@ function BrandCreatorKitManager({ offers, verificationStatus, notify, onToggleAs
               </div>
             </div>
           </div>
-          <div className="form-actions"><button className="button" type="submit" disabled={uploading || !uploadAllowed}>{uploading ? "Загрузка…" : "Загрузить материал"}</button></div>
+          <div className="form-actions"><button className="button" type="submit" disabled={uploading || !uploadAllowed}>{!uploadAllowed ? "Требуется подтверждение бренда" : uploading ? "Загрузка…" : "Загрузить материал"}</button></div>
           </form>
         </>
       )}
@@ -2407,8 +2433,8 @@ function BrandTeamPanel({ managers, invitations, onInvite, onRevokeInvitation, o
   );
 }
 
-function BrandDashboard({ user, role, managerBrands, activeBrandId, onSelectManagerBrand, offers, applications, relationships, finance, orderImportPreview, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview, onSaveScenarios, transitionOffer, onUploadOrders, onConfirmOrders, canManageTeam, teamManagers, teamInvitations, onInviteManager, onRevokeInvitation, onRemoveManager, onChangeOfferManager, onChangeRelationshipManager }) {
-  const [tab, setTab] = useState("offers");
+function BrandDashboard({ user, role, managerBrands, activeBrandId, onSelectManagerBrand, offers, applications, relationships, finance, orderImportPreview, initialTab = "offers", initialCreatorKitOfferId, initialCreatorKitFocus, updateApplication, transitionRelationship, navigate, notify, onToggleAsset, onDownloadAsset, onUploadAsset, onLoadPreview, onSaveScenarios, onReload, transitionOffer, onUploadOrders, onConfirmOrders, canManageTeam, teamManagers, teamInvitations, onInviteManager, onRevokeInvitation, onRemoveManager, onChangeOfferManager, onChangeRelationshipManager }) {
+  const [tab, setTab] = useState(initialTab);
   const [offerFilter, setOfferFilter] = useState("all");
   const [relationshipFilter, setRelationshipFilter] = useState("all");
   const isManager = role === "manager";
@@ -2701,12 +2727,13 @@ function BrandDashboard({ user, role, managerBrands, activeBrandId, onSelectMana
       )}
 
       {tab === "tracking" && <SalesTrackingLive notify={notify} preview={orderImportPreview} onUpload={onUploadOrders} onConfirm={onConfirmOrders} />}
-      {tab === "creatorKit" && <BrandCreatorKitManager offers={offers} verificationStatus={user?.profile?.verificationStatus} notify={notify} onToggleAsset={onToggleAsset} onDownloadAsset={onDownloadAsset} onUploadAsset={onUploadAsset} onLoadPreview={onLoadPreview} onSaveScenarios={onSaveScenarios} />}
+      {tab === "creatorKit" && <BrandCreatorKitManager offers={offers} relationships={relationships} verificationStatus={user?.profile?.verificationStatus} initialOfferId={initialCreatorKitOfferId} initialFocus={initialCreatorKitFocus} notify={notify} onToggleAsset={onToggleAsset} onDownloadAsset={onDownloadAsset} onUploadAsset={onUploadAsset} onLoadPreview={onLoadPreview} onSaveScenarios={onSaveScenarios} onReload={onReload} />}
     </DashboardLayout>
   );
 }
 
-function CreateOfferPage({ publish, navigate, initialOffer, managers, onChangeOfferManager }) {
+function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAllowed, managers, onChangeOfferManager }) {
+  const initialProductFacts = initialOffer?.creatorKit?.factsRaw || [];
   const scenariosLoaded = !initialOffer || Array.isArray(initialOffer.creatorKit?.scenarios);
   const defaultScenarios = scenariosLoaded && initialOffer?.creatorKit?.scenarios
     ? initialOffer.creatorKit.scenarios.map((scenario) => ({
@@ -2735,6 +2762,21 @@ function CreateOfferPage({ publish, navigate, initialOffer, managers, onChangeOf
     scenarios: defaultScenarios
   });
   const [scenarioErrors, setScenarioErrors] = useState({});
+  const [categoryError, setCategoryError] = useState("");
+  const [imageError, setImageError] = useState("");
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreviewUrl, setImagePreviewUrl] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!imageFile) {
+      setImagePreviewUrl("");
+      return undefined;
+    }
+    const objectUrl = URL.createObjectURL(imageFile);
+    setImagePreviewUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [imageFile]);
 
   const update = (key, value) => setForm({ ...form, [key]: value });
   const categorySelectValue = getOfferCategorySelectValue(form.category);
@@ -2806,6 +2848,30 @@ function CreateOfferPage({ publish, navigate, initialOffer, managers, onChangeOf
     });
     setScenarioErrors(errors);
     return Object.keys(errors).length === 0;
+  };
+  const submitOffer = async (shouldPublish, destination = "offers") => {
+    const category = form.category.trim();
+    if (!category) {
+      setCategoryError("Укажите свою категорию.");
+      return;
+    }
+    const nextImageError = validateOfferImageFile(imageFile);
+    if (nextImageError) {
+      setImageError(nextImageError);
+      return;
+    }
+    setImageError("");
+    setSaving(true);
+    try {
+      await publish(
+        { ...previewOffer, category, imageFile },
+        shouldPublish,
+        initialOffer?.id,
+        { destination }
+      );
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -4684,10 +4750,10 @@ function App() {
       {page === "register" && <RegisterPage presetRole={registerRole} complete={completeRegistration} navigate={navigate} />}
       {page === "login" && <LoginPage login={login} verifyMfa={verifyMfa} navigate={navigate} />}
       {page === "creator" && role === "creator" && <CreatorDashboard user={user} applications={applications} relationships={relationships} offers={offers} finance={creatorFinance} cancelApplication={cancelApplication} copyValue={copyValue} navigate={navigate} />}
-      {page === "brand" && role === "brand" && <BrandDashboard user={user} role={role} managerBrands={[]} activeBrandId={null} onSelectManagerBrand={() => {}} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} onChangeRelationshipManager={changeRelationshipManager} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} onSaveScenarios={saveCreatorKitScenarios} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} canManageTeam teamManagers={teamManagers} teamInvitations={teamInvitations} onInviteManager={inviteManager} onRevokeInvitation={revokeInvitation} onRemoveManager={removeManager} />}
+      {page === "brand" && role === "brand" && <BrandDashboard user={user} role={role} managerBrands={[]} activeBrandId={null} onSelectManagerBrand={() => {}} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} initialTab={brandDashboardTarget.tab} initialCreatorKitOfferId={brandDashboardTarget.creatorKitOfferId} initialCreatorKitFocus={brandDashboardTarget.creatorKitFocus} updateApplication={updateApplication} transitionRelationship={transitionRelationship} onChangeRelationshipManager={changeRelationshipManager} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} onSaveScenarios={saveCreatorKitScenarios} onReload={() => loadOffers("brand")} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} canManageTeam teamManagers={teamManagers} teamInvitations={teamInvitations} onInviteManager={inviteManager} onRevokeInvitation={revokeInvitation} onRemoveManager={removeManager} />}
       {["manager", "brand", "create"].includes(page) && role === "manager" && !activeBrandId && <ManagerBrandSelector brands={managerBrands} activeBrandId={activeBrandId} onSelect={selectManagerBrand} />}
-      {page === "brand" && role === "manager" && activeBrandId && <BrandDashboard user={brandDashboardUser} role={role} managerBrands={managerBrands} activeBrandId={activeBrandId} onSelectManagerBrand={selectManagerBrand} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} updateApplication={updateApplication} transitionRelationship={transitionRelationship} onChangeRelationshipManager={changeRelationshipManager} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} onSaveScenarios={saveCreatorKitScenarios} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} teamManagers={teamManagers} />}
-      {page === "create" && ["brand", "manager"].includes(role) && (role !== "manager" || activeBrandId) && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} managers={teamManagers} onChangeOfferManager={changeOfferManager} />}
+      {page === "brand" && role === "manager" && activeBrandId && <BrandDashboard user={brandDashboardUser} role={role} managerBrands={managerBrands} activeBrandId={activeBrandId} onSelectManagerBrand={selectManagerBrand} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} initialTab={brandDashboardTarget.tab} initialCreatorKitOfferId={brandDashboardTarget.creatorKitOfferId} initialCreatorKitFocus={brandDashboardTarget.creatorKitFocus} updateApplication={updateApplication} transitionRelationship={transitionRelationship} onChangeRelationshipManager={changeRelationshipManager} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} onSaveScenarios={saveCreatorKitScenarios} onReload={() => loadOffers("manager")} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} teamManagers={teamManagers} />}
+      {page === "create" && ["brand", "manager"].includes(role) && (role !== "manager" || activeBrandId) && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} brandName={brandDashboardUser?.profile?.brandName} uploadAllowed={brandDashboardUser?.profile?.verificationStatus === "VERIFIED"} managers={teamManagers} onChangeOfferManager={changeOfferManager} />}
       {page === "admin" && role === "admin" && <AdminDashboard user={user} offers={offers} brands={adminBrands} operationalReadiness={operationalReadiness} finance={adminFinance} createPayout={createPayout} approvePayout={approvePayout} markPayoutPaid={markPayoutPaid} cancelPayout={cancelPayout} verifyBrand={verifyBrand} changeAdminPassword={changeAdminPassword} beginAdminMfa={beginAdminMfa} confirmAdminMfa={confirmAdminMfa} />}
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
