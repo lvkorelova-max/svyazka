@@ -3795,7 +3795,7 @@ function App() {
 
   const loadFinance = async (currentRole) => {
     if (["brand", "manager"].includes(currentRole)) {
-      const [ordersData, commissionsData, analyticsData, creatorAnalyticsData] = await Promise.all([
+      const [ordersData, commissionsData, analyticsData, creatorAnalyticsData, overviewData, statementsData] = await Promise.all([
         api("/brand/orders?pageSize=100"),
         api("/brand/commissions?pageSize=100"),
         api("/brand/analytics"),
