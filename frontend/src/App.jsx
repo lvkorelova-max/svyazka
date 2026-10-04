@@ -686,6 +686,23 @@ function PermissionValue({ value }) {
   return <span className={`permission-value ${value ? "yes" : "no"}`}>{value ? "Разрешено" : "Нет"}</span>;
 }
 
+function AssetPreview({ asset }) {
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [asset.previewUrl]);
+
+  const label = asset.type.slice(0, 2).toUpperCase();
+  return (
+    <span className={`asset-preview ${asset.previewUrl && !failed ? "has-image" : ""}`}>
+      {asset.previewUrl && !failed
+        ? <img src={asset.previewUrl} alt={`Превью: ${asset.name}`} loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => setFailed(true)} />
+        : label}
+    </span>
+  );
+}
+
 function CreatorKitLoadError({ onRetry }) {
   return (
     <section className="creator-kit">
