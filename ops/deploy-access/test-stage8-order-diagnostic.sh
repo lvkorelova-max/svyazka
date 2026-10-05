@@ -42,7 +42,7 @@ if [[ "${FAKE_STATUS:-OK}" == "BRAND_NOT_FOUND" ]]; then
   exit 0
 fi
 if [[ "${FAKE_STATUS:-OK}" == "BRAND_AMBIGUOUS" ]]; then
-  printf '%s\n' '{"status":"BRAND_AMBIGUOUS","matchCount":2,"fromUtc":"2026-10-03T17:00:00Z","toUtc":"2026-10-04T17:00:00Z"}'
+  printf '%s\n' '{"status":"BRAND_AMBIGUOUS","matchCount":2,"truncated":false,"candidates":[{"id":"brand-active","brandName":"BYSOLA","timezone":"Europe/Moscow","tildaIntegration":{"id":"integration-active","status":"ACTIVE","lastWebhookAt":"2026-10-04T12:00:00.000Z","lastOrderReceivedAt":"2026-10-04T12:01:00.000Z","lastPaidOrderAt":"2026-10-04T12:02:00.000Z","lastErrorCode":null,"lastErrorAt":null,"trackerInstallation":{"id":"tracker-active","status":"ACTIVE","healthStatus":"HEALTHY","lastEventAt":"2026-10-04T11:59:00.000Z","lastWebhookAt":"2026-10-04T12:00:00.000Z"}},"activity":{"clickSessionCount":1,"orderEventCount":1,"canonicalOrderCount":0,"hasActivity":true}},{"id":"brand-stale","brandName":"BYSOLA","timezone":"Europe/Moscow","tildaIntegration":null,"activity":{"clickSessionCount":0,"orderEventCount":0,"canonicalOrderCount":0,"hasActivity":false}}],"fromUtc":"2026-10-03T17:00:00Z","toUtc":"2026-10-04T17:00:00Z"}'
   exit 0
 fi
 printf '%s\n' '{"status":"OK","brand":{"id":"opaque-brand-id","brandName":"BYSOLA","timezone":"Europe/Moscow"},"range":{"fromUtc":"2026-10-03T17:00:00Z","toUtc":"2026-10-04T17:00:00Z","semantics":"half_open_utc_[from,to)"},"clickSessions":{"count":0,"items":[]},"events":[],"summary":{"eventCount":0,"canonicalOrderCount":0,"attributedOrderCount":0,"financeAcknowledgedCount":0}}'
@@ -84,7 +84,11 @@ ambiguous_output="$(FAKE_STATUS=BRAND_AMBIGUOUS "$deployctl" stage8-order-diagno
   2026-10-03T17:00:00Z 2026-10-04T17:00:00Z)"
 [[ "$ambiguous_output" == *'"status":"BRAND_AMBIGUOUS"'* ]] ||
   { printf 'FAIL: ambiguous brand was not reported safely\n' >&2; exit 1; }
-if grep -Eiq 'secret|password|api.?key|webhook.?key|payload|ipHash|userAgentHash' <<<"$valid_output"; then
+[[ "$ambiguous_output" == *'"candidates":['* ]] ||
+  { printf 'FAIL: ambiguous brand candidates were not surfaced\n' >&2; exit 1; }
+[[ "$ambiguous_output" == *'"hasActivity":true'* ]] ||
+  { printf 'FAIL: ambiguous brand activity signal is missing\n' >&2; exit 1; }
+if grep -Eiq 'secret|password|api.?key|webhook.?key|payload|ipHash|userAgentHash' <<<"$valid_output$ambiguous_output"; then
   printf 'FAIL: diagnostic output exposed a sensitive/raw field\n' >&2
   exit 1
 fi
