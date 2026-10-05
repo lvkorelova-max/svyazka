@@ -1,10 +1,11 @@
 const { PrismaClient } = require("@prisma/client");
 
 const prisma = new PrismaClient();
-const brandName = process.env.SVYAZKA_DIAG_BRAND;
+const brandSelector = process.env.SVYAZKA_DIAG_BRAND;
 const from = new Date(process.env.SVYAZKA_DIAG_FROM);
 const to = new Date(process.env.SVYAZKA_DIAG_TO);
 const LIMIT = 200;
+const BRAND_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function iso(value) {
   return value ? new Date(value).toISOString() : null;
@@ -48,21 +49,30 @@ function stageFor(row) {
 
 (async () => {
   try {
-    const brands = await prisma.brandProfile.findMany({
-      where: { brandName: { equals: brandName, mode: "insensitive" } },
-      select: { id: true, brandName: true, timezone: true },
-      take: LIMIT,
-    });
+    const selectBrand = { id: true, brandName: true, timezone: true };
+    const brandIdSelected = BRAND_ID_PATTERN.test(brandSelector);
+    const brands = brandIdSelected
+      ? [
+          await prisma.brandProfile.findUnique({
+            where: { id: brandSelector },
+            select: selectBrand,
+          }),
+        ].filter(Boolean)
+      : await prisma.brandProfile.findMany({
+          where: { brandName: { equals: brandSelector, mode: "insensitive" } },
+          select: selectBrand,
+          take: LIMIT,
+        });
     if (brands.length === 0) {
       console.log(JSON.stringify({
         status: "BRAND_NOT_FOUND",
-        brandName,
+        ...(brandIdSelected ? { brandId: brandSelector } : { brandName: brandSelector }),
         fromUtc: process.env.SVYAZKA_DIAG_FROM,
         toUtc: process.env.SVYAZKA_DIAG_TO,
       }));
       return;
     }
-    if (brands.length > 1) {
+    if (!brandIdSelected && brands.length > 1) {
       const candidates = await Promise.all(
         brands.map(async (candidate) => {
           const [integration, clickSessionCount, orderEventCount, canonicalOrderCount] =

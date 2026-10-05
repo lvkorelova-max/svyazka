@@ -60,6 +60,11 @@ valid_output="$("$deployctl" stage8-order-diagnostic BYSOLA \
 [[ "$valid_output" == *'"status":"OK"'* ]] ||
   { printf 'FAIL: valid diagnostic invocation was not accepted\n' >&2; exit 1; }
 
+brand_id_output="$("$deployctl" stage8-order-diagnostic 7fb03a58-8bad-45c4-872b-4d31bf8955da \
+  2026-10-03T17:00:00Z 2026-10-04T17:00:00Z)"
+[[ "$brand_id_output" == *'"status":"OK"'* ]] ||
+  { printf 'FAIL: exact brand id diagnostic invocation was not accepted\n' >&2; exit 1; }
+
 assert_fail "$deployctl" stage8-order-diagnostic 'BYSOLA;cat' \
   2026-10-03T17:00:00Z 2026-10-04T17:00:00Z
 assert_fail "$deployctl" stage8-order-diagnostic 'BYSOLA$(touch /tmp/pwned)' \
@@ -88,7 +93,7 @@ ambiguous_output="$(FAKE_STATUS=BRAND_AMBIGUOUS "$deployctl" stage8-order-diagno
   { printf 'FAIL: ambiguous brand candidates were not surfaced\n' >&2; exit 1; }
 [[ "$ambiguous_output" == *'"hasActivity":true'* ]] ||
   { printf 'FAIL: ambiguous brand activity signal is missing\n' >&2; exit 1; }
-if grep -Eiq 'secret|password|api.?key|webhook.?key|payload|ipHash|userAgentHash' <<<"$valid_output$ambiguous_output"; then
+if grep -Eiq 'secret|password|api.?key|webhook.?key|payload|ipHash|userAgentHash' <<<"$valid_output$brand_id_output$ambiguous_output"; then
   printf 'FAIL: diagnostic output exposed a sensitive/raw field\n' >&2
   exit 1
 fi
@@ -108,6 +113,12 @@ grep -Fq 'BRAND_NOT_FOUND' <<<"$diagnostic_block" ||
   { printf 'FAIL: nonexistent brand is not handled safely\n' >&2; exit 1; }
 grep -Fq 'BRAND_AMBIGUOUS' <<<"$diagnostic_block" ||
   { printf 'FAIL: ambiguous brand is not handled safely\n' >&2; exit 1; }
+grep -Fq 'BRAND_ID_PATTERN' <<<"$diagnostic_block" ||
+  { printf 'FAIL: exact brand id selector is missing\n' >&2; exit 1; }
+grep -Fq 'where: { id: brandSelector }' <<<"$diagnostic_block" ||
+  { printf 'FAIL: exact brand id lookup is missing\n' >&2; exit 1; }
+grep -Fq '!brandIdSelected && brands.length > 1' <<<"$diagnostic_block" ||
+  { printf 'FAIL: name ambiguity guard no longer distinguishes exact brand id\n' >&2; exit 1; }
 grep -Fq 'diagnostic_helper' "$source_script" ||
   { printf 'FAIL: helper path is not fixed in deployctl\n' >&2; exit 1; }
 grep -Fq 'readonly diagnostic_helper="/usr/local/libexec/svyazka-stage8-order-diagnostic.js"' "$source_script" ||
