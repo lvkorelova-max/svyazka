@@ -6,6 +6,7 @@ readonly deploy_root="/opt/svyazka/deploy"
 readonly incoming_root="/var/lib/svyazka-deploy/incoming"
 readonly current_link="/opt/svyazka/current"
 readonly max_archive_bytes=$((512 * 1024 * 1024))
+readonly diagnostic_helper="/usr/local/libexec/svyazka-stage8-order-diagnostic.js"
 readonly feature_flags=(
   STAGE7_FINANCE_ENABLED
   STAGE7_FINANCIAL_ACTIVATION_ENABLED
@@ -421,6 +422,64 @@ show_logs() {
   /usr/bin/docker logs --since "$since" "svyazka-production-${service}-1"
 }
 
+utc_epoch() {
+  local timestamp="$1"
+  local parsed
+  if parsed="$(/bin/date -u -d "$timestamp" +%s 2>/dev/null)"; then
+    printf '%s\n' "$parsed"
+    return 0
+  fi
+  if parsed="$(/bin/date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$timestamp" +%s 2>/dev/null)"; then
+    printf '%s\n' "$parsed"
+    return 0
+  fi
+  return 1
+}
+
+stage8_order_diagnostic() {
+  local brand_name="$1"
+  local from_utc="$2"
+  local to_utc="$3"
+  local result validated
+
+  [[ "$brand_name" =~ ^[A-Za-z0-9][A-Za-z0-9._\ -]{0,79}$ ]] ||
+    fail "invalid brand name"
+  [[ "$from_utc" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] ||
+    fail "invalid UTC start timestamp"
+  [[ "$to_utc" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] ||
+    fail "invalid UTC end timestamp"
+  local from_epoch to_epoch
+  from_epoch="$(utc_epoch "$from_utc")" ||
+    fail "invalid UTC start timestamp"
+  to_epoch="$(utc_epoch "$to_utc")" ||
+    fail "invalid UTC end timestamp"
+  (( to_epoch > from_epoch )) || fail "end timestamp must be after start timestamp"
+  (( to_epoch - from_epoch <= 7 * 86400 )) ||
+    fail "diagnostic window exceeds 7 days"
+  [[ -f "$diagnostic_helper" && -r "$diagnostic_helper" ]] ||
+    fail "diagnostic helper is missing"
+
+  result="$(
+    /usr/bin/docker exec -i \
+      -e "SVYAZKA_DIAG_BRAND=$brand_name" \
+      -e "SVYAZKA_DIAG_FROM=$from_utc" \
+      -e "SVYAZKA_DIAG_TO=$to_utc" \
+      svyazka-production-backend-1 node < "$diagnostic_helper" 2>/dev/null
+  )" || fail "production order diagnostic failed"
+
+  validated="$(
+    printf '%s\n' "$result" |
+    /usr/bin/jq -ce '
+      select(
+        .status == "OK" or
+        .status == "BRAND_NOT_FOUND" or
+        .status == "BRAND_AMBIGUOUS"
+      )
+    '
+  )" || fail "invalid production order diagnostic output"
+  printf '%s\n' "$validated"
+}
+
 cleanup_upload() {
   local archive
   archive="$(archive_path "$1")"
@@ -444,6 +503,7 @@ Usage:
   svyazka-deployctl preserve-image SERVICE rollback-SHA
   svyazka-deployctl activate RELEASE SERVICE...
   svyazka-deployctl logs SERVICE [10m]
+  svyazka-deployctl stage8-order-diagnostic BRAND_NAME START_UTC END_UTC
   svyazka-deployctl cleanup-upload ARCHIVE_NAME
 EOF
   exit 2
@@ -470,6 +530,7 @@ case "$command" in
   preserve-image) [[ "$#" -eq 2 ]] || usage; preserve_image "$@" ;;
   activate) [[ "$#" -ge 2 ]] || usage; activate_release "$@" ;;
   logs) [[ "$#" -ge 1 && "$#" -le 2 ]] || usage; show_logs "$@" ;;
+  stage8-order-diagnostic) [[ "$#" -eq 3 ]] || usage; stage8_order_diagnostic "$@" ;;
   cleanup-upload) [[ "$#" -eq 1 ]] || usage; cleanup_upload "$@" ;;
   *) usage ;;
 esac
