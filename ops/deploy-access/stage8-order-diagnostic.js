@@ -51,7 +51,7 @@ function stageFor(row) {
     const brands = await prisma.brandProfile.findMany({
       where: { brandName: { equals: brandName, mode: "insensitive" } },
       select: { id: true, brandName: true, timezone: true },
-      take: 2,
+      take: LIMIT,
     });
     if (brands.length === 0) {
       console.log(JSON.stringify({
@@ -63,9 +63,93 @@ function stageFor(row) {
       return;
     }
     if (brands.length > 1) {
+      const candidates = await Promise.all(
+        brands.map(async (candidate) => {
+          const [integration, clickSessionCount, orderEventCount, canonicalOrderCount] =
+            await Promise.all([
+              prisma.tildaIntegration.findUnique({
+                where: { brandId: candidate.id },
+                select: {
+                  id: true,
+                  status: true,
+                  lastWebhookAt: true,
+                  lastOrderReceivedAt: true,
+                  lastPaidOrderAt: true,
+                  lastErrorCode: true,
+                  lastErrorAt: true,
+                  trackerInstallation: {
+                    select: {
+                      id: true,
+                      status: true,
+                      healthStatus: true,
+                      lastEventAt: true,
+                      lastWebhookAt: true,
+                    },
+                  },
+                },
+              }),
+              prisma.clickSession.count({
+                where: {
+                  offer: { brandId: candidate.id },
+                  OR: [
+                    { firstClickedAt: { gte: from, lt: to } },
+                    { lastSeenAt: { gte: from, lt: to } },
+                  ],
+                },
+              }),
+              prisma.stage8OrderEvent.count({
+                where: {
+                  brandId: candidate.id,
+                  OR: [
+                    { occurredAt: { gte: from, lt: to } },
+                    { receivedAt: { gte: from, lt: to } },
+                    { orderCreatedAt: { gte: from, lt: to } },
+                  ],
+                },
+              }),
+              prisma.order.count({
+                where: { brandId: candidate.id, orderDate: { gte: from, lt: to } },
+              }),
+            ]);
+          return {
+            id: candidate.id,
+            brandName: candidate.brandName,
+            timezone: candidate.timezone,
+            tildaIntegration: integration
+              ? {
+                  id: integration.id,
+                  status: integration.status,
+                  lastWebhookAt: iso(integration.lastWebhookAt),
+                  lastOrderReceivedAt: iso(integration.lastOrderReceivedAt),
+                  lastPaidOrderAt: iso(integration.lastPaidOrderAt),
+                  lastErrorCode: integration.lastErrorCode,
+                  lastErrorAt: iso(integration.lastErrorAt),
+                  trackerInstallation: integration.trackerInstallation
+                    ? {
+                        id: integration.trackerInstallation.id,
+                        status: integration.trackerInstallation.status,
+                        healthStatus: integration.trackerInstallation.healthStatus,
+                        lastEventAt: iso(integration.trackerInstallation.lastEventAt),
+                        lastWebhookAt: iso(integration.trackerInstallation.lastWebhookAt),
+                      }
+                    : null,
+                }
+              : null,
+            activity: {
+              clickSessionCount,
+              orderEventCount,
+              canonicalOrderCount,
+              hasActivity:
+                clickSessionCount > 0 || orderEventCount > 0 || canonicalOrderCount > 0,
+            },
+          };
+        }),
+      );
       console.log(JSON.stringify({
         status: "BRAND_AMBIGUOUS",
         matchCount: brands.length,
+        truncated: brands.length === LIMIT,
+        candidates,
         fromUtc: process.env.SVYAZKA_DIAG_FROM,
         toUtc: process.env.SVYAZKA_DIAG_TO,
       }));
