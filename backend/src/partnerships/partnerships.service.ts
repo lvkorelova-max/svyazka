@@ -31,6 +31,7 @@ import {
   CREATOR_PROMO_CODE_NORMALIZATION_POLICY,
   isValidCreatorPromoCode,
   normalizeCreatorPromoCode,
+  suggestCreatorPromoCode,
 } from '../common/promo-code';
 import { ReplacePromoCodeDto } from './dto/replace-promo-code.dto';
 
@@ -483,9 +484,20 @@ export class PartnershipsService {
     dto: ApproveApplicationDto = {},
   ) {
     const brand = await this.getBrand(userId, activeBrandId);
+    const requestedPromoCode =
+      dto.promoCode === undefined
+        ? undefined
+        : normalizeCreatorPromoCode(dto.promoCode);
+    if (
+      requestedPromoCode !== undefined &&
+      !isValidCreatorPromoCode(requestedPromoCode)
+    ) {
+      throw new BadRequestException(
+        'Промокод должен содержать от 4 до 20 латинских букв или цифр',
+      );
+    }
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const affiliateCode = randomBytes(24).toString('base64url');
-      const promoCode = this.generatePromoCode();
       try {
         const result = await this.prisma.$transaction(
           async (tx) => {
@@ -578,6 +590,25 @@ export class PartnershipsService {
                 message: 'Не найдена запись согласия креатора с текущими условиями',
               });
             }
+            const suggestedPromoCode =
+              requestedPromoCode ??
+              (application.creator?.displayName
+                ? suggestCreatorPromoCode(application.creator.displayName)
+                : null);
+            let promoCode = requestedPromoCode ?? suggestedPromoCode;
+            if (promoCode) {
+              const existingPromoCode = await tx.creatorPromoCode.findUnique({
+                where: { normalizedCode: promoCode },
+                select: { id: true },
+              });
+              if (existingPromoCode) {
+                if (requestedPromoCode !== undefined) {
+                  this.throwReservedPromoCode();
+                }
+                promoCode = this.generatePromoCode();
+              }
+            }
+            promoCode ??= this.generatePromoCode();
             const activatedAt = new Date();
             const relationship = await tx.affiliateRelationship.create({
               data: {
@@ -1347,7 +1378,11 @@ export class PartnershipsService {
     if (error.code === 'P2034') return true;
     if (error.code !== 'P2002') return false;
     const target = String(error.meta?.target ?? '');
-    return target.includes('affiliateCode') || target.includes('promoCode');
+    return (
+      target.includes('affiliateCode') ||
+      target.includes('promoCode') ||
+      target.includes('normalizedCode')
+    );
   }
 
   private isPromoCodeUniqueConflict(error: unknown) {

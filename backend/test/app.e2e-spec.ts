@@ -871,7 +871,7 @@ describe('Stage 1 end-to-end', () => {
     expect(first.body.affiliateCode).not.toBe(second.body.affiliateCode);
     expect(first.body.promoCode).not.toBe(second.body.promoCode);
     expect(first.body.affiliateCode).toMatch(/^[A-Za-z0-9_-]{32}$/);
-    expect(first.body.promoCode).toMatch(/^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{10}$/);
+    expect(first.body.promoCode).toBe('KREATOR');
   });
 
   it('перенаправляет только ACTIVE-связь опубликованного оффера', async () => {

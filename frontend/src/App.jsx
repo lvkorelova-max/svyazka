@@ -36,6 +36,7 @@ import {
   getAdminApplicationStatus,
   getAdminCreatorStatus
 } from "./adminDirectory.mjs";
+import { suggestCreatorPromoCode } from "./promoCode.mjs";
 
 const productImages = {
   skincare: "https://images.unsplash.com/photo-1556228578-8c89e6adf883?auto=format&fit=crop&w=1200&q=85",
@@ -2498,6 +2499,7 @@ function BrandDashboard({ user, role, managerBrands, activeBrandId, onSelectMana
   const [offerFilter, setOfferFilter] = useState("all");
   const [relationshipFilter, setRelationshipFilter] = useState("all");
   const [promoDrafts, setPromoDrafts] = useState({});
+  const [approvalPromoDrafts, setApprovalPromoDrafts] = useState({});
   const isManager = role === "manager";
   const visibleOffers = isManager
     ? offers.filter((offer) => (
@@ -2659,7 +2661,19 @@ function BrandDashboard({ user, role, managerBrands, activeBrandId, onSelectMana
                       {application.status === "PENDING" && (
                         <div className="row-actions">
                           <button className="button secondary small" onClick={() => updateApplication(application.id, "reject")}>Отклонить</button>
-                          <button className="button small" disabled={approvalBlocked} title={approvalBlocked ? "Креатор должен принять текущие коммерческие условия" : ""} onClick={() => updateApplication(application.id, "approve")}>Одобрить</button>
+                          <label className="form-group compact">
+                            <span className="table-subtitle">Промокод для креатора</span>
+                            <input
+                              className="field"
+                              value={approvalPromoDrafts[application.id] ?? suggestCreatorPromoCode(application.creator.displayName) ?? ""}
+                              onChange={(event) => setApprovalPromoDrafts((current) => ({ ...current, [application.id]: event.target.value }))}
+                              placeholder="Например, PETUNIN"
+                              maxLength={20}
+                              disabled={approvalBlocked}
+                            />
+                            <span className="table-subtitle">Этот код будет передан креатору.</span>
+                          </label>
+                          <button className="button small" disabled={approvalBlocked} title={approvalBlocked ? "Креатор должен принять текущие коммерческие условия" : ""} onClick={() => updateApplication(application.id, "approve", approvalPromoDrafts[application.id] ?? suggestCreatorPromoCode(application.creator.displayName) ?? "")}>Одобрить</button>
                         </div>
                       )}
                     </td>
@@ -4475,9 +4489,14 @@ function App() {
     }
   };
 
-  const updateApplication = async (applicationId, action) => {
+  const updateApplication = async (applicationId, action, promoCode) => {
     try {
-      await api(`/brand/applications/${applicationId}/${action}`, { method: "POST" });
+      await api(`/brand/applications/${applicationId}/${action}`, {
+        method: "POST",
+        ...(action === "approve" && promoCode !== undefined
+          ? { body: JSON.stringify({ promoCode }) }
+          : {})
+      });
       await loadOffers(role);
       notify(action === "approve" ? "Заявка одобрена, партнёрская связь создана" : "Заявка отклонена");
     } catch (error) {

@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, Min } from 'class-validator';
+import { IsInt, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 
 export class AcceptApplicationTermsDto {
   @Type(() => Number)
@@ -26,4 +26,9 @@ export class ApproveApplicationDto {
   @IsInt()
   @Min(1)
   expectedApplicationVersion?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  promoCode?: string;
 }
