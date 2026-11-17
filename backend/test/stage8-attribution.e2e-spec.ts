@@ -1149,6 +1149,51 @@ describe("Stage 8 sales attribution engine", () => {
     );
   });
 
+  it("stores one affiliate order and one accrual for a retried BYSOLA payment", async () => {
+    const redirect = await request(app.getHttpServer())
+      .get(`/go/${relationship.affiliateCode}`)
+      .expect(302);
+    const attributionId = new URL(redirect.headers.location).searchParams.get("svz_a");
+    expect(attributionId).toMatch(/^svz_a_/);
+    const externalOrderId = "ord_b715d4f3101444a28bb9da6da0c134ba";
+    const eventId = `bysola-paid-${externalOrderId}`;
+    const brandId = relationship.offer.brandId;
+    const occurredAt = new Date().toISOString();
+    const payload = {
+      schemaVersion: "1.0",
+      type: "PAYMENT_SUCCEEDED",
+      occurredAt,
+      order: {
+        externalOrderId,
+        createdAt: occurredAt,
+        amountMinor: "129000",
+        shippingAmountMinor: "0",
+        currency: "RUB",
+        offerId,
+      },
+      attribution: { attributionId },
+    };
+    const first = await signedEvent(eventId, payload).expect(201);
+    expect(first.body).toMatchObject({ accepted: true, duplicate: false, status: "PROCESSED" });
+    const retry = await signedEvent(eventId, payload).expect(201);
+    expect(retry.body).toMatchObject({ accepted: true, duplicate: true, eventId: first.body.eventId });
+
+    const order = await prisma.order.findUniqueOrThrow({
+      where: { brandId_externalOrderId: { brandId, externalOrderId } },
+      include: { currentAttributionResult: true, commission: true, ledgerTransactions: true },
+    });
+    expect(order.status).toBe("PAID");
+    expect(order.affiliateRelationshipId).toBe(relationship.id);
+    expect(order.currentAttributionResult?.status).toBe("AUTO_ATTRIBUTED");
+    expect(order.financialHandoffStatus).toBe("ACKNOWLEDGED");
+    expect(order.commission).not.toBeNull();
+    expect(order.creatorCommissionAmountMinor).toBeGreaterThan(0n);
+    expect(order.ledgerTransactions.filter(row => row.type === "ACCRUAL")).toHaveLength(1);
+    expect(await prisma.order.count({ where: { brandId, externalOrderId } })).toBe(1);
+    expect(await prisma.commission.count({ where: { orderId: order.id } })).toBe(1);
+    expect(await prisma.stage8OrderEvent.count({ where: { brandId, externalOrderId } })).toBe(1);
+  });
+
   it("automatically attributes a paid sale and exposes expected commission immediately", async () => {
     const redirect = await request(app.getHttpServer())
       .get(`/go/${relationship.affiliateCode}`)
