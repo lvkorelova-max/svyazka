@@ -1,3 +1,4 @@
+import { legalDocuments } from "./legalDocuments.mjs";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   api,
@@ -37,6 +38,9 @@ import {
   getAdminCreatorStatus
 } from "./adminDirectory.mjs";
 import { suggestCreatorPromoCode } from "./promoCode.mjs";
+import { getOfferKitFormFields, buildOfferKitFields } from "./offerKitFields.mjs";
+
+const offerImagePlaceholder = "/offer-placeholder.svg";
 
 const productImages = {
   skincare: "https://images.unsplash.com/photo-1556228578-8c89e6adf883?auto=format&fit=crop&w=1200&q=85",
@@ -503,12 +507,19 @@ function ManagerBrandSelector({ brands, activeBrandId, onSelect, compact = false
   );
 }
 
+function OfferImage({ offer, alt = offer.title }) {
+  return <img key={offer.image} src={offer.image || offerImagePlaceholder} alt={alt} onError={(event) => {
+    const img = event.currentTarget;
+    if (img.getAttribute("src") !== offerImagePlaceholder) img.src = offerImagePlaceholder;
+  }} />;
+}
+
 function OfferCard({ offer, onOpen }) {
   const reward = Math.round(offer.price * offer.commission / 100);
   return (
     <article className="offer-card" onClick={() => onOpen(offer)} tabIndex="0" onKeyDown={(event) => event.key === "Enter" && onOpen(offer)}>
       <div className="offer-image">
-        <img src={offer.image} alt={offer.title} />
+        <OfferImage offer={offer} />
       </div>
       <div className="offer-card-body">
         <div className="offer-meta">
@@ -540,7 +551,17 @@ function Footer({ navigate }) {
     <footer className="footer">
       <div className="container footer-inner">
         <BrandLogo onClick={() => navigate("home")} />
-        <span>Демонстрационный прототип · Все данные тестовые</span>
+          <>
+            <nav className="footer-documents" aria-label="Документы">
+              <strong>Документы</strong>
+              <ul>{legalDocuments.map(([file, title]) => (
+                <li key={file}><a href={`/legal/${file}.html`}>{title}</a></li>
+              ))}</ul>
+            </nav>
+            <p className="footer-requisites">
+              ООО «Байсола Групп» · ИНН 2311374274 · <a href="mailto:info@bysola.ru">info@bysola.ru</a>
+            </p>
+          </>
       </div>
     </footer>
   );
@@ -644,7 +665,6 @@ function HomePage({ offers, navigate, openOffer }) {
           </div>
         </div>
       </section>
-      <Footer navigate={navigate} />
     </main>
   );
 }
@@ -692,7 +712,6 @@ function CatalogPage({ offers, openOffer, navigate, role }) {
           <div className="empty-state">По заданным условиям офферы не найдены.</div>
         )}
       </div>
-      <Footer navigate={navigate} />
     </main>
   );
 }
@@ -1046,7 +1065,7 @@ function OfferPage({ offer, applicationStatus, role, apply, navigate, notify, on
         </div>
         <div className="offer-layout">
           <div className="offer-gallery-main">
-            <img src={offer.image} alt={offer.title} />
+            <OfferImage offer={offer} />
           </div>
           <div className="offer-detail">
             <div className="brand-line">{offer.brand} · {offer.category}</div>
@@ -1111,6 +1130,42 @@ function RegisterPage({ presetRole, complete, navigate }) {
   const [step, setStep] = useState(presetRole ? 2 : 1);
   const [selectedRole, setSelectedRole] = useState(presetRole || "");
   const [form, setForm] = useState({});
+  const [terms, setTerms] = useState(null);
+  const [termsError, setTermsError] = useState(false);
+  const [termsAttempt, setTermsAttempt] = useState(0);
+  const [agreementAccepted, setAgreementAccepted] = useState(false);
+  const [creatorTermsAccepted, setCreatorTermsAccepted] = useState(false);
+
+  useEffect(() => {
+    setAgreementAccepted(false);
+    setCreatorTermsAccepted(false);
+  }, [selectedRole]);
+
+  useEffect(() => {
+    if (step !== 2) return;
+    let active = true;
+    setTerms(null);
+    setTermsError(false);
+    setAgreementAccepted(false);
+    setCreatorTermsAccepted(false);
+    api("/auth/registration-terms")
+      .then(data => { if (active) setTerms(data); })
+      .catch(() => { if (active) setTermsError(true); });
+    return () => { active = false; };
+  }, [step, termsAttempt]);
+
+  const canCreate = terms?.required === false || (
+    terms?.required === true && agreementAccepted &&
+    (selectedRole !== "creator" || creatorTermsAccepted)
+  );
+  const submitRegistration = () => {
+    if (!canCreate) return;
+    return complete(selectedRole, form, terms.required ? {
+      legalRevision: terms.revision,
+      userAgreementAccepted: agreementAccepted,
+      ...(selectedRole === "creator" ? { creatorTermsAccepted } : {}),
+    } : undefined);
+  };
 
   useEffect(() => {
     if (presetRole) {
@@ -1209,9 +1264,27 @@ function RegisterPage({ presetRole, complete, navigate }) {
                   </>
                 )}
               </div>
+              {terms?.required && (
+                <fieldset className="registration-terms">
+                  <legend>Условия регистрации</legend>
+                  <label>
+                    <input type="checkbox" checked={agreementAccepted} onChange={e => setAgreementAccepted(e.target.checked)} />
+                    Принимаю <a href={terms.agreement.url} target="_blank" rel="noreferrer">Пользовательское соглашение</a>
+                  </label>
+                  {selectedRole === "creator" && (
+                    <label>
+                      <input type="checkbox" checked={creatorTermsAccepted} onChange={e => setCreatorTermsAccepted(e.target.checked)} />
+                      Принимаю <a href={terms.creatorTerms.url} target="_blank" rel="noreferrer">Условия для креаторов</a>
+                    </label>
+                  )}
+                  <a href="/legal/04_privacy.html" target="_blank" rel="noreferrer">Как мы обрабатываем персональные данные</a>
+                </fieldset>
+              )}
+              {!terms && !termsError && <p role="status">Загружаем условия регистрации…</p>}
+              {termsError && <p role="alert">Условия регистрации не загрузились. <button type="button" className="button ghost" onClick={() => setTermsAttempt(attempt => attempt + 1)}>Повторить</button></p>}
               <div className="form-actions">
                 <button className="button ghost" onClick={() => setStep(1)}>← Назад</button>
-                <button className="button" onClick={() => complete(selectedRole, form)}>Создать аккаунт</button>
+                <button className="button" disabled={!canCreate} onClick={submitRegistration}>Создать аккаунт</button>
               </div>
             </>
           )}
@@ -1378,7 +1451,7 @@ function CreatorDashboard({ user, applications, relationships, offers, finance, 
               if (!offer) return null;
               return (
                 <div className="creator-offer" key={relationship.id}>
-                  <div className="creator-offer-image"><img src={offer.image} alt="" /></div>
+                  <div className="creator-offer-image"><OfferImage offer={offer} alt="" /></div>
                   <div>
                     <h3>{offer.title}</h3>
                     <p>{offer.brand} · ваша ставка {formatRateBps(relationship.commercialAgreement?.creatorEffectiveGmvBps || offer.creatorEffectiveBps)}</p>
@@ -2852,11 +2925,12 @@ function BrandDashboard({ user, role, managerBrands, activeBrandId, onSelectMana
   );
 }
 
-function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAllowed, managers, onChangeOfferManager }) {
-  const initialProductFacts = initialOffer?.creatorKit?.factsRaw || [];
+function CreateOfferPage({ role, publish, navigate, initialOffer, brandName, uploadAllowed, managers, onChangeOfferManager }) {
+  const canEditCommercialTerms = role === "brand";
   const scenariosLoaded = !initialOffer || Array.isArray(initialOffer.creatorKit?.scenarios);
   const defaultScenarios = scenariosLoaded && initialOffer?.creatorKit?.scenarios
     ? initialOffer.creatorKit.scenarios.map((scenario) => ({
+        ...scenario,
         channel: scenarioChannelValues[scenario.channel] || scenario.channel,
         title: scenario.title,
         idea: scenario.idea,
@@ -2875,16 +2949,14 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAll
     terms: "Нативная интеграция в контент об уходе и образе жизни.",
     promotionWithoutSample: initialOffer?.creatorKit?.promotionWithoutSample || "restricted",
     allowedDigitalFormats: initialOffer?.creatorKit?.allowedDigitalFormats || [...digitalFormats],
-    productFacts: formatOfferProductFacts(initialProductFacts),
-    allowedClaims: "Подходит для ежедневного ухода; бренд указывает в составе…",
-    forbiddenClaims: "Я протестировала и рекомендую; гарантированно решает проблему",
-    publicationRequirements: "Указать название и цену, добавить маркировку рекламы, упомянуть @lunea.",
+    ...getOfferKitFormFields(initialOffer?.creatorKit),
     scenarios: defaultScenarios
   });
   const [scenarioErrors, setScenarioErrors] = useState({});
   const [categoryError, setCategoryError] = useState("");
   const [imageError, setImageError] = useState("");
   const [imageFile, setImageFile] = useState(null);
+  const [savedDraftId, setSavedDraftId] = useState(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -2934,7 +3006,7 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAll
     image: getOfferPreviewImage(
       imagePreviewUrl,
       initialOffer?.image,
-      initialOffer ? productImages.skincare : productImages.cosmetics
+      offerImagePlaceholder
     ),
     status: "review",
     applications: 0,
@@ -2943,10 +3015,11 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAll
   const previewOffer = {
     ...previewBase,
     creatorKit: {
-      ...buildCreatorKit(previewBase),
+      ...initialOffer?.creatorKit,
       promotionWithoutSample: form.promotionWithoutSample,
       allowedDigitalFormats: form.allowedDigitalFormats,
       scenarios: form.scenarios,
+      ...buildOfferKitFields(form, initialOffer?.creatorKit),
       allowedClaims: form.allowedClaims.split(";").map((item) => item.trim()).filter(Boolean),
       forbiddenClaims: form.forbiddenClaims.split(";").map((item) => item.trim()).filter(Boolean)
     },
@@ -2970,6 +3043,7 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAll
     return Object.keys(errors).length === 0;
   };
   const submitOffer = async (shouldPublish, destination = "offers") => {
+    if (saving || !validateScenarios()) return;
     const category = form.category.trim();
     if (!category) {
       setCategoryError("Укажите свою категорию.");
@@ -2986,8 +3060,8 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAll
       await publish(
         { ...previewOffer, category, imageFile },
         shouldPublish,
-        initialOffer?.id,
-        { destination }
+        initialOffer?.id || savedDraftId,
+        { destination, onDraftCreated: setSavedDraftId }
       );
     } finally {
       setSaving(false);
@@ -3065,7 +3139,7 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAll
                   <span id="offer-image-hint" className={`form-hint ${imageError ? "error" : ""}`}>
                     {imageError ||
                       (!uploadAllowed
-                        ? "Загрузка доступна после подтверждения бренда администратором."
+                        ? (role === "manager" ? "Фото товара может загрузить владелец бренда." : "Загрузка доступна после подтверждения бренда администратором.")
                         : imageFile
                           ? `${imageFile.name} — изображение справа уже обновлено.`
                           : initialOffer?.imageUrl
@@ -3077,9 +3151,9 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAll
             </section>
             <section className="form-section">
               <h2>Партнёрские условия</h2>
-              <p>Укажите общий commission pool. Распределение 65/35 рассчитывает сервер.</p>
+              <p>{canEditCommercialTerms ? "Укажите общий commission pool. Распределение 65/35 рассчитывает сервер." : "Ставка указана для ознакомления. Распределение 65/35 рассчитывает сервер."}</p>
               <div className="form-grid">
-                <div className="form-group"><label className="form-label">Общая комиссия Brand, %</label><input className="field" type="number" min="0" max="100" step="0.01" value={form.commission} onChange={(e) => update("commission", Number(e.target.value))} /></div>
+                <div className="form-group"><label className="form-label">Общая комиссия Brand, %</label><input className="field" type="number" min="0" max="100" step="0.01" value={form.commission} readOnly={!canEditCommercialTerms} aria-describedby={!canEditCommercialTerms ? "offer-commission-permissions" : undefined} onChange={(e) => update("commission", Number(e.target.value))} />{!canEditCommercialTerms && <span id="offer-commission-permissions" className="form-hint">Комиссию изменяет владелец бренда.</span>}</div>
                 <div className="form-group"><label className="form-label">Креатор получает</label><div className="field" aria-live="polite">{creatorPreviewRate}% от GMV</div></div>
                 <div className="form-group"><label className="form-label">Service fee Связки</label><div className="field" aria-live="polite">{platformPreviewRate}% от GMV</div></div>
                 <div className="form-group"><label className="form-label">Продаж до запроса товара</label><input className="field" type="number" value={form.threshold} onChange={(e) => update("threshold", Number(e.target.value))} /></div>
@@ -3169,8 +3243,8 @@ function CreateOfferPage({ publish, navigate, initialOffer, brandName, uploadAll
               </div>
             </section>
             <div className="form-actions">
-              {(!initialOffer || initialOffer.apiStatus === "DRAFT") && <button className="button secondary" onClick={() => validateScenarios() && publish(previewOffer, false, initialOffer?.id)}>Сохранить черновик</button>}
-              <button className="button" onClick={() => validateScenarios() && publish(previewOffer, !initialOffer || initialOffer.apiStatus === "DRAFT", initialOffer?.id)}>
+              {(!initialOffer || initialOffer.apiStatus === "DRAFT") && <button className="button secondary" disabled={saving} onClick={() => submitOffer(false)}>Сохранить черновик</button>}
+              <button className="button" disabled={saving} onClick={() => submitOffer(!initialOffer || initialOffer.apiStatus === "DRAFT")}>
                 {initialOffer && initialOffer.apiStatus !== "DRAFT" ? "Сохранить изменения" : "Опубликовать оффер"}
               </button>
             </div>
@@ -3482,7 +3556,7 @@ function toUiOffer(offer, creatorKitResponse = null) {
     currency: offer.currency || "RUB",
     threshold: offer.productRequirementSales || 0,
     imageUrl: offer.imageUrl || "",
-    image: offer.imageUrl || productImages.skincare,
+    image: offer.imageUrl || offerImagePlaceholder,
     status: offer.status === "PUBLISHED" ? "active" : offer.status.toLowerCase(),
     apiStatus: offer.status,
     statusLabel: STATUS_LABELS[offer.status] || offer.status,
@@ -3553,22 +3627,40 @@ const scenarioChannelValues = Object.fromEntries(Object.entries(scenarioChannelL
 
 function creatorKitPayload(kit) {
   return {
-    brandContent: {
+    ...(kit.brandContent ? { brandContent: {
       description: kit.brandContent?.description || undefined,
       history: kit.brandContent?.history || undefined,
       values: kit.brandContent?.values || [],
       positioning: kit.brandContent?.positioning || undefined,
       accessLevel: kit.brandContent?.accessLevel || "DIGITAL",
       requiresAffiliateApproval: Boolean(kit.brandContent?.requiresAffiliateApproval)
-    },
-    productContent: {
+    } } : {}),
+    ...(kit.productContent ? { productContent: {
       description: kit.productContent?.description || undefined,
       benefits: kit.productContent?.benefits || [],
       usageInstructions: kit.productContent?.usageInstructions || undefined,
       accessLevel: kit.productContent?.accessLevel || "DIGITAL",
       requiresAffiliateApproval: Boolean(kit.productContent?.requiresAffiliateApproval)
-    },
-    scenarios: (kit.scenarios || []).map((scenario, index) => ({
+    } } : {}),
+    ...(Object.hasOwn(kit, "factsRaw") ? { facts: kit.factsRaw.map((fact, sortOrder) => ({
+      type: fact.type, value: fact.value, accessLevel: fact.accessLevel || "DIGITAL",
+      requiresAffiliateApproval: Boolean(fact.requiresAffiliateApproval), sortOrder,
+    })) } : {}),
+    ...(Object.hasOwn(kit, "claimsRaw") ? { claims: kit.claimsRaw.map((claim, sortOrder) => ({
+      type: claim.type, value: claim.value, accessLevel: claim.accessLevel || "DIGITAL",
+      requiresAffiliateApproval: Boolean(claim.requiresAffiliateApproval), sortOrder,
+    })) } : {}),
+    ...(kit.publicationRaw ? { publicationRequirements: {
+      mandatoryMentions: kit.publicationRaw.mandatoryMentions,
+      advertisingLabel: kit.publicationRaw.advertisingLabel,
+      hashtags: kit.publicationRaw.hashtags,
+      brandMention: kit.publicationRaw.brandMention,
+      approvalRequired: kit.publicationRaw.approvalRequired,
+      allowedPlatforms: kit.publicationRaw.allowedPlatforms,
+      accessLevel: kit.publicationRaw.accessLevel || "DIGITAL",
+      requiresAffiliateApproval: Boolean(kit.publicationRaw.requiresAffiliateApproval),
+    } } : {}),
+    ...(Object.hasOwn(kit, "scenarios") ? { scenarios: kit.scenarios.map((scenario, index) => ({
       channel: scenario.channelValue || scenarioChannelValues[scenario.channel] || scenario.channel,
       title: scenario.title,
       mainIdea: scenario.mainIdea || scenario.idea,
@@ -3578,7 +3670,7 @@ function creatorKitPayload(kit) {
       accessLevel: scenario.accessLevel || "DIGITAL",
       requiresAffiliateApproval: scenario.requiresAffiliateApproval || false,
       sortOrder: index
-    }))
+    })) } : {})
   };
 }
 
@@ -3852,6 +3944,42 @@ function ManagerInvitationPage({ token, user, role, navigate, notify, onAcceptEx
   );
 }
 
+function OfferLaunchReview({ review, onClose, onAccept }) {
+  const [accepted, setAccepted] = useState(false);
+  const dialog = useRef(null);
+  useEffect(() => { dialog.current.showModal(); }, []);
+  const { card, document } = review;
+  const pct = bps => `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(bps / 100)} %`;
+  const money = minor => new Intl.NumberFormat("ru-RU", { style: "currency", currency: card.currency }).format(Number(minor) / 100);
+  const pool = card.calculationPolicy === "POOL_65_35_V1";
+  return (
+    <dialog ref={dialog} className="offer-launch-dialog" onCancel={event => { event.preventDefault(); onClose(); }}>
+      <h2>Условия запуска оффера</h2>
+      <p>{review.title} · коммерческая карточка №{card.version}</p>
+      <dl>
+        {pool && <><dt>Общая ставка</dt><dd>{pct(card.totalCommissionPoolBps)}</dd></>}
+        <dt>Креатор</dt><dd>{pool ? `${pct(card.creatorPoolShareBps)} от общего бюджета комиссии` : `${pct(card.creatorEffectiveGmvBps)} от расчётной базы`}</dd>
+        <dt>Платформа</dt><dd>{pool ? `Остаток общего бюджета комиссии (доля ${pct(card.platformPoolShareBps)})` : `${pct(card.platformEffectiveGmvBps)} от расчётной базы`}</dd>
+        <dt>Расчёт ставок</dt><dd>{pool ? "Расчётная база × общая ставка. Из полученной суммы рассчитывается доля креатора. Обе суммы округляются до копейки." : "Отдельная ставка каждой стороны от расчётной базы"}</dd>
+        <dt>Порог выплаты</dt><dd>{card.creatorPayoutThreshold?.mode === "NONE" ? "Без порога" :
+          card.creatorPayoutThreshold?.mode === "MINIMUM" ? `${money(card.creatorPayoutThreshold.amountMinor)} · максимальная отсрочка: ${card.creatorPayoutThreshold.maxDeferralDays} дн.` : money(card.minimumPayoutMinor)}</dd>
+        {card.creatorPayoutThreshold && <><dt>График</dt><dd>Расчёт 1-го и 15-го по Москве. Проверка заказов без отдельного удержания.</dd></>}
+        {card.attributionWindow?.windowDays != null && <><dt>Окно атрибуции</dt><dd>{card.attributionWindow.windowDays} дн.</dd></>}
+        {!card.creatorPayoutThreshold && card.confirmationPolicy?.holdDays != null && <><dt>Срок подтверждения комиссии</dt><dd>{card.confirmationPolicy.holdDays} дн.</dd></>}
+        <dt>Начисления</dt><dd>{card.commissionEligibility?.scope === "SELECTED_PRODUCTS" ? `Выбранные товары: ${(card.commissionEligibility.externalProductIds || []).join(", ")}` : "Все товары магазина"}</dd>
+        {!card.creatorPayoutThreshold && ["MONTHLY", "MANUAL"].includes(card.payoutSchedule?.schedule) && <><dt>График выплат</dt><dd>{card.payoutSchedule.schedule === "MONTHLY" ? "Ежемесячный" : "Ручной"}</dd></>}
+        <dt>Пример с базы {money(card.example.base)}</dt><dd>Креатор — {money(card.example.creator)}; платформа — {money(card.example.platform)}</dd>
+      </dl>
+      <p><a href={document.url} target="_blank" rel="noopener noreferrer">Оферта для брендов, версия {document.revision}</a></p>
+      <label className="offer-launch-check"><input type="checkbox" checked={accepted} onChange={event => setAccepted(event.target.checked)} /> Принимаю оферту для брендов и условия этой коммерческой карточки.</label>
+      <div className="offer-launch-actions">
+        <button type="button" className="button secondary" onClick={onClose}>Отмена</button>
+        <button type="button" className="button" disabled={!accepted} onClick={onAccept}>Подтвердить и запустить</button>
+      </div>
+    </dialog>
+  );
+}
+
 function App() {
   const [page, setPage] = useState("home");
   const [invitationToken] = useState(() => {
@@ -3868,6 +3996,7 @@ function App() {
   const [offers, setOffers] = useState([]);
   const [selectedOfferId, setSelectedOfferId] = useState(null);
   const [editingOfferId, setEditingOfferId] = useState(null);
+  const [offerLaunchReview, setOfferLaunchReview] = useState(null);
   const [brandDashboardTarget, setBrandDashboardTarget] = useState({
     tab: "offers",
     creatorKitOfferId: null,
@@ -3920,8 +4049,8 @@ function App() {
         api("/brand/commissions?pageSize=100"),
         api("/brand/analytics"),
         api("/brand/analytics/creators?pageSize=100"),
-        api("/brand/finance/overview"),
-        api("/brand/statements")
+        currentRole === "brand" ? api("/brand/finance/overview") : Promise.resolve({}),
+        currentRole === "brand" ? api("/brand/statements") : Promise.resolve([])
       ]);
       setBrandFinance({ orders: ordersData, commissions: commissionsData, analytics: analyticsData, creatorAnalytics: creatorAnalyticsData, overview: overviewData, statements: statementsData });
     } else if (currentRole === "creator") {
@@ -4013,7 +4142,7 @@ function App() {
       ]);
       setApplications(applicationGroups.flat());
       setRelationships(brandRelationships);
-      await loadFinance("brand");
+      await loadFinance(currentRole);
     } else if (currentRole === "creator") {
       const [data, creatorApplications, creatorRelationships] = await Promise.all([
         api("/creator/offers"),
@@ -4304,7 +4433,7 @@ function App() {
     document.title = `${pageTitles[page] || "Связка"} · Связка`;
   }, [page]);
 
-  const completeRegistration = async (newRole, form) => {
+  const completeRegistration = async (newRole, form, acceptance) => {
     try {
       const name = newRole === "brand" ? form.company : form.name;
       const result = await api("/auth/register", {
@@ -4313,7 +4442,8 @@ function App() {
           email: form.email,
           password: form.password,
           role: newRole.toUpperCase(),
-          name
+          name,
+          ...acceptance
         })
       });
       clearManagerBrandContext(user?.id, role === "manager");
@@ -4574,7 +4704,7 @@ function App() {
     try {
       await api(`/brand/order-imports/${importId}/confirm`, { method: "POST" });
       setOrderImportPreview((current) => current ? { ...current, status: "IMPORTED" } : current);
-      await loadFinance("brand");
+      await loadFinance(role);
       notify("Заказы импортированы, комиссии рассчитаны");
     } catch (error) {
       notify(error.message);
@@ -4741,15 +4871,42 @@ function App() {
     }
   };
 
+  const publishOffer = async offerId => {
+    const path = `/brand/offers/${offerId}`;
+    const review = await api(`${path}/publish-review`);
+    if (review.required) {
+      const accepted = await new Promise(resolve => setOfferLaunchReview({ review, resolve }));
+      if (!accepted) return false;
+    }
+    await api(`${path}/publish`, {
+      method: "POST",
+      ...(review.required ? { body: JSON.stringify({ accepted: true, reviewHash: review.reviewHash }) } : {}),
+    });
+    return true;
+  };
+
+  const completeOfferLaunchReview = accepted => {
+    const pending = offerLaunchReview;
+    setOfferLaunchReview(null);
+    pending.resolve(accepted);
+  };
+
   const saveOffer = async (offer, shouldPublish = false, existingOfferId = null, options = {}) => {
     try {
+      if (offer.imageFile && role !== "brand") throw new Error("Фото товара может загрузить владелец бренда.");
+      if (offer.imageFile) {
+        const imageError = validateOfferImageFile(offer.imageFile);
+        if (imageError) throw new Error(imageError);
+      }
       const promotionMap = { yes: "YES", no: "NO", restricted: "LIMITED" };
       const payload = {
         title: offer.title,
         description: offer.description,
         productPriceKopecks: Math.round(offer.price * 100),
         ...(offer.productUrl ? { productUrl: offer.productUrl } : {}),
-        totalCommissionPoolBps: Math.round((offer.totalCommission ?? offer.commission) * 100),
+        ...(role === "brand" || !existingOfferId
+          ? { totalCommissionPoolBps: Math.round((offer.totalCommission ?? offer.commission) * 100) }
+          : {}),
         promotionWithoutProduct: promotionMap[offer.creatorKit.promotionWithoutSample],
         category: offer.category,
         productRequirementSales: offer.threshold,
@@ -4761,13 +4918,31 @@ function App() {
           ...payload
         })
       });
+      if (!existingOfferId) options.onDraftCreated?.(saved.id);
+      if (offer.imageFile) {
+        const file = offer.imageFile;
+        const imagePath = `/brand/offers/${saved.id}/image/uploads`;
+        const initialized = await api(imagePath, {
+          method: "POST",
+          body: JSON.stringify({ originalFileName: file.name, mimeType: file.type, byteSize: file.size })
+        });
+        const uploadResponse = await fetch(initialized.uploadUrl, {
+          method: "PUT", headers: initialized.requiredHeaders, body: file
+        }).catch(() => { throw new Error("Не удалось загрузить фото. Попробуйте ещё раз."); });
+        if (!uploadResponse.ok) throw new Error("Хранилище не приняло фото. Попробуйте ещё раз.");
+        await api(`${imagePath}/${initialized.upload.id}/complete`, { method: "POST" });
+      }
       if (!existingOfferId || offer.creatorKitScenariosLoaded) {
         await api(`/brand/offers/${saved.id}/creator-kit`, {
           method: "PUT",
           body: JSON.stringify(creatorKitPayload(offer.creatorKit))
         });
       }
-      if (shouldPublish) await api(`/brand/offers/${saved.id}/publish`, { method: "POST" });
+      if (shouldPublish && !await publishOffer(saved.id)) {
+        await loadOffers(role);
+        notify("Изменения сохранены. Оффер не запущен.");
+        return true;
+      }
       await loadOffers(role);
       notify(shouldPublish ? "Оффер сохранён и опубликован" : "Черновик сохранён");
       navigate(
@@ -4803,7 +4978,11 @@ function App() {
 
   const transitionOffer = async (offerId, action) => {
     try {
-      await api(`/brand/offers/${offerId}/${action}`, { method: "POST" });
+      if (action === "publish") {
+        if (!await publishOffer(offerId)) return;
+      } else {
+        await api(`/brand/offers/${offerId}/${action}`, { method: "POST" });
+      }
       await loadOffers(role);
       notify("Статус оффера обновлён");
     } catch (error) {
@@ -4897,6 +5076,7 @@ function App() {
 
   return (
     <div className="app">
+      {offerLaunchReview && <OfferLaunchReview review={offerLaunchReview.review} onClose={() => completeOfferLaunchReview(false)} onAccept={() => completeOfferLaunchReview(true)} />}
       {!["register", "login", "manager-invitation"].includes(page) && <Header page={page} role={role} navigate={navigate} logout={logout} />}
       {page === "home" && <HomePage offers={offers.filter((offer) => offer.status === "active")} navigate={navigate} openOffer={openOffer} />}
       {page === "manager-invitation" && invitationToken && <ManagerInvitationPage token={invitationToken} user={user} role={role} navigate={navigate} notify={notify} onAcceptExisting={acceptExistingManagerInvitation} />}
@@ -4908,8 +5088,9 @@ function App() {
       {page === "brand" && role === "brand" && <BrandDashboard user={user} role={role} managerBrands={[]} activeBrandId={null} onSelectManagerBrand={() => {}} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} initialTab={brandDashboardTarget.tab} initialCreatorKitOfferId={brandDashboardTarget.creatorKitOfferId} initialCreatorKitFocus={brandDashboardTarget.creatorKitFocus} updateApplication={updateApplication} transitionRelationship={transitionRelationship} replacePromoCode={replaceCreatorPromoCode} confirmPromoCode={confirmCreatorPromoCode} copyValue={copyValue} onChangeRelationshipManager={changeRelationshipManager} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} onSaveScenarios={saveCreatorKitScenarios} onReload={() => loadOffers("brand")} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} canManageTeam teamManagers={teamManagers} teamInvitations={teamInvitations} onInviteManager={inviteManager} onRevokeInvitation={revokeInvitation} onRemoveManager={removeManager} />}
       {["manager", "brand", "create"].includes(page) && role === "manager" && !activeBrandId && <ManagerBrandSelector brands={managerBrands} activeBrandId={activeBrandId} onSelect={selectManagerBrand} />}
       {page === "brand" && role === "manager" && activeBrandId && <BrandDashboard user={brandDashboardUser} role={role} managerBrands={managerBrands} activeBrandId={activeBrandId} onSelectManagerBrand={selectManagerBrand} offers={offers} applications={applications} relationships={relationships} finance={brandFinance} orderImportPreview={orderImportPreview} initialTab={brandDashboardTarget.tab} initialCreatorKitOfferId={brandDashboardTarget.creatorKitOfferId} initialCreatorKitFocus={brandDashboardTarget.creatorKitFocus} updateApplication={updateApplication} transitionRelationship={transitionRelationship} copyValue={copyValue} onChangeRelationshipManager={changeRelationshipManager} navigate={navigate} notify={notify} onToggleAsset={toggleCreatorKitAsset} onDownloadAsset={downloadCreatorKitAsset} onUploadAsset={uploadCreatorKitAsset} onLoadPreview={loadCreatorKitPreview} onSaveScenarios={saveCreatorKitScenarios} onReload={() => loadOffers("manager")} transitionOffer={transitionOffer} onChangeOfferManager={changeOfferManager} onUploadOrders={uploadOrdersCsv} onConfirmOrders={confirmOrdersCsv} teamManagers={teamManagers} />}
-      {page === "create" && ["brand", "manager"].includes(role) && (role !== "manager" || activeBrandId) && <CreateOfferPage publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} brandName={brandDashboardUser?.profile?.brandName} uploadAllowed={brandDashboardUser?.profile?.verificationStatus === "VERIFIED"} managers={teamManagers} onChangeOfferManager={changeOfferManager} />}
+      {page === "create" && ["brand", "manager"].includes(role) && (role !== "manager" || activeBrandId) && <CreateOfferPage role={role} publish={saveOffer} navigate={navigate} initialOffer={offers.find((offer) => offer.id === editingOfferId)} brandName={brandDashboardUser?.profile?.brandName} uploadAllowed={role === "brand" && brandDashboardUser?.profile?.verificationStatus === "VERIFIED"} managers={teamManagers} onChangeOfferManager={changeOfferManager} />}
       {page === "admin" && role === "admin" && <AdminDashboard user={user} offers={offers} brands={adminBrands} operationalReadiness={operationalReadiness} finance={adminFinance} createPayout={createPayout} approvePayout={approvePayout} markPayoutPaid={markPayoutPaid} cancelPayout={cancelPayout} issueStatement={issueStatement} recordBrandPayment={recordBrandPayment} resolveDispute={resolveDispute} runReconciliation={runReconciliation} verifyBrand={verifyBrand} changeAdminPassword={changeAdminPassword} beginAdminMfa={beginAdminMfa} confirmAdminMfa={confirmAdminMfa} />}
+      <Footer navigate={navigate} />
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
   );

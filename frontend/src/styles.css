@@ -3223,3 +3223,18 @@ p {
     text-align: center;
   }
 }
+
+.registration-terms{border:1px solid #d9e2dd;border-radius:8px;padding:16px;margin:20px 0}
+.registration-terms label{display:flex;align-items:flex-start;gap:10px;margin:12px 0}
+.registration-terms input{width:auto;flex-shrink:0;margin-top:5px}
+.offer-launch-dialog{max-width:680px;width:calc(100% - 32px);max-height:85vh;overflow:auto;border:1px solid #d9e2dd;border-radius:12px;padding:24px}
+.offer-launch-dialog::backdrop{background:#0008}
+.offer-launch-dialog dl{display:grid;grid-template-columns:minmax(100px,1fr) 2fr;gap:10px}
+.offer-launch-dialog dd{margin:0;overflow-wrap:anywhere}
+.offer-launch-check{display:flex;gap:10px;margin:20px 0}
+.offer-launch-actions{display:flex;justify-content:flex-end;gap:12px}
+
+.footer-documents ul{display:flex;flex-wrap:wrap;gap:10px 24px;list-style:none;padding:0}
+.footer-documents a{color:inherit}
+.footer-inner{flex-wrap:wrap}
+.footer-requisites{font-size:14px}

@@ -4,6 +4,8 @@ import { UserRole } from '@prisma/client';
 import * as argon2 from 'argon2';
 import cookieParser = require('cookie-parser');
 import request = require('supertest');
+import { execFileSync } from 'child_process';
+import { resolve } from 'path';
 import { AppModule } from '../src/app.module';
 import { BigIntSerializerInterceptor } from '../src/common/interceptors/bigint-serializer.interceptor';
 import { PrismaService } from '../src/prisma/prisma.service';
@@ -320,6 +322,56 @@ describe('Manager access and responsibility end-to-end', () => {
       .post(`/api/brand/team/managers/${charlieId}`)
       .set(managerHeaders(annaToken, brandBId))
       .expect(403);
+  });
+
+  it.each(['MANAGER', 'BRAND'])('persists Creator Kit form fields for %s and preserves unedited policy', async role => {
+    const token = role === 'MANAGER' ? annaToken : brandAToken;
+    const headers = role === 'MANAGER' ? managerHeaders(token, brandAId) : auth(token);
+    const created = await request(app.getHttpServer()).post('/api/brand/offers')
+      .set(headers).send({ ...offerPayload, title: 'Creator Kit form ' + role }).expect(201);
+    const id = created.body.id;
+    const seeded = {
+      brandContent: { description: 'Existing brand history', values: ['Existing value'], accessLevel: 'PRODUCT', requiresAffiliateApproval: true },
+      facts: [{ type: 'INGREDIENTS', value: 'Original composition', accessLevel: 'PRODUCT', requiresAffiliateApproval: true, sortOrder: 0 }],
+      claims: [
+        { type: 'ALLOWED', value: 'Original claim', accessLevel: 'DIGITAL', sortOrder: 0 },
+        { type: 'FORBIDDEN', value: 'Original prohibition', accessLevel: 'PRODUCT', requiresAffiliateApproval: true, sortOrder: 1 },
+      ],
+      publicationRequirements: { mandatoryMentions: ['Original mention'], advertisingLabel: 'Реклама', hashtags: ['#bysola'], brandMention: '@bysola', approvalRequired: true, allowedPlatforms: ['VK'], accessLevel: 'PRODUCT', requiresAffiliateApproval: true },
+    };
+    await request(app.getHttpServer()).put(`/api/brand/offers/${id}/creator-kit`).set(headers).send(seeded).expect(200);
+    const read = await request(app.getHttpServer()).get(`/api/brand/offers/${id}/creator-kit`).set(headers).expect(200);
+    const originalTerms = (await prisma.offer.findUniqueOrThrow({ where: { id } })).currentCommercialTermsId;
+    // Run the actual frontend form builder and serializer in Node, then send its DTO.
+    const dto = JSON.parse(execFileSync(process.execPath, ['-e', `
+      const fs=require('fs'), vm=require('vm'), {parse}=require('@babel/parser');
+      const input=JSON.parse(fs.readFileSync(0,'utf8'));
+      (async()=>{
+        const {getOfferKitFormFields,buildOfferKitFields}=await import('./frontend/src/offerKitFields.mjs');
+        const source=fs.readFileSync('frontend/src/App.jsx','utf8');
+        const node=parse(source,{sourceType:'module',plugins:['jsx']}).program.body.find(n=>n.type==='FunctionDeclaration'&&n.id.name==='creatorKitPayload');
+        const serialize=vm.runInNewContext(source.slice(node.start,node.end)+';creatorKitPayload;',{scenarioChannelValues:{}});
+        const form={...getOfferKitFormFields(input.kit),...input.changes};
+        process.stdout.write(JSON.stringify(serialize(buildOfferKitFields(form,input.kit))));
+      })().catch(e=>{console.error(e.message);process.exitCode=1;});
+    `], { cwd: resolve(__dirname, '../..'), encoding: 'utf8', input: JSON.stringify({
+      kit: { factsRaw: read.body.facts, claimsRaw: read.body.claims, publicationRaw: read.body.publicationRequirements },
+      changes: { productFacts: 'Updated composition', allowedClaims: 'Updated allowed claim', publicationRequirements: 'Updated mention' },
+    }) }));
+    await request(app.getHttpServer()).put(`/api/brand/offers/${id}/creator-kit`).set(headers).send(dto).expect(200);
+    const after = await request(app.getHttpServer()).get(`/api/brand/offers/${id}/creator-kit`).set(headers).expect(200);
+    expect(after.body.facts[0]).toMatchObject({ value: 'Updated composition', accessLevel: 'PRODUCT', requiresAffiliateApproval: true });
+    expect(after.body.claims.find((claim: { type: string }) => claim.type === 'ALLOWED').value).toBe('Updated allowed claim');
+    expect(after.body.claims.find((claim: { type: string }) => claim.type === 'FORBIDDEN')).toMatchObject({ value: 'Original prohibition', accessLevel: 'PRODUCT', requiresAffiliateApproval: true });
+    expect(after.body.publicationRequirements).toMatchObject({ ...seeded.publicationRequirements, mandatoryMentions: ['Updated mention'] });
+    expect(after.body.brandContent.description).toBe('Existing brand history');
+    await request(app.getHttpServer()).put(`/api/brand/offers/${id}/creator-kit`).set(headers).send({ scenarios: [] }).expect(200);
+    const partial = await request(app.getHttpServer()).get(`/api/brand/offers/${id}/creator-kit`).set(headers).expect(200);
+    expect(partial.body.facts).toEqual(after.body.facts);
+    expect(partial.body.claims).toEqual(after.body.claims);
+    expect(partial.body.brandContent).toEqual(after.body.brandContent);
+    expect(partial.body.publicationRequirements).toEqual(after.body.publicationRequirements);
+    expect((await prisma.offer.findUniqueOrThrow({ where: { id } })).currentCommercialTermsId).toBe(originalTerms);
   });
 
   it('publishes a Brand Creator Kit scenario only after the draft is published', async () => {

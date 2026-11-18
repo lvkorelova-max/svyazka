@@ -1,5 +1,6 @@
 import { INestApplication, RequestMethod, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import * as argon2 from 'argon2';
 import cookieParser = require('cookie-parser');
 import request = require('supertest');
@@ -104,6 +105,53 @@ describe('Stage 1 end-to-end', () => {
     expect(readiness.body.operational.invitationsAllowed).toBe(
       readiness.body.status === 'READY',
     );
+  });
+
+  it('requires the current legal version and records accepted documents for the role', async () => {
+    const config = app.get(ConfigService);
+    const settings = {
+      LEGAL_REGISTRATION_REVISION: 'e2e-legal-v1',
+      LEGAL_USER_AGREEMENT_SHA256: 'a'.repeat(64),
+      LEGAL_CREATOR_TERMS_SHA256: 'b'.repeat(64),
+    };
+    const previous = Object.keys(settings).map(key => [key, config.get<string>(key) ?? ''] as const);
+    for (const [key, value] of Object.entries(settings)) config.set(key, value);
+    const candidate = { ...creator, email: 'legal-creator.e2e@example.test' };
+    try {
+      const { body: terms } = await request(app.getHttpServer())
+        .get('/api/auth/registration-terms').expect('Cache-Control', 'no-store').expect(200);
+      expect(terms).toMatchObject({
+        required: true, revision: settings.LEGAL_REGISTRATION_REVISION,
+        agreement: { url: '/legal/archive/e2e-legal-v1/01_user_agreement.html', sha256: settings.LEGAL_USER_AGREEMENT_SHA256 },
+        creatorTerms: { url: '/legal/archive/e2e-legal-v1/03_creator_terms.html', sha256: settings.LEGAL_CREATOR_TERMS_SHA256 },
+      });
+      await register(candidate).expect(409);
+      await register({ ...candidate, legalRevision: 'previous', userAgreementAccepted: true, creatorTermsAccepted: true }).expect(409);
+      await register({ ...candidate, legalRevision: terms.revision, userAgreementAccepted: true }).expect(400);
+      expect(await prisma.user.findUnique({ where: { email: candidate.email } })).toBeNull();
+
+      const creatorSignup = await register({
+        ...candidate, legalRevision: terms.revision, userAgreementAccepted: true, creatorTermsAccepted: true,
+      }).expect(201);
+      const brandSignup = await register({
+        ...brand, email: 'legal-brand.e2e@example.test', legalRevision: terms.revision, userAgreementAccepted: true,
+      }).expect(201);
+      for (const [userId, role, documents] of [
+        [creatorSignup.body.user.id, 'CREATOR', [terms.agreement, terms.creatorTerms]],
+        [brandSignup.body.user.id, 'BRAND', [terms.agreement]],
+      ] as const) {
+        const audit = await prisma.auditLog.findMany({
+          where: { action: 'REGISTRATION_TERMS_ACCEPTED', actorUserId: userId, entityId: userId },
+        });
+        expect(audit).toHaveLength(1);
+        expect(audit[0].createdAt).toBeInstanceOf(Date);
+        expect(audit[0].metadata).toEqual({
+          revision: terms.revision, method: 'EXPLICIT_CHECKBOX', role, documents,
+        });
+      }
+    } finally {
+      for (const [key, value] of previous) config.set(key, value);
+    }
   });
 
   it('регистрирует бренд и сохраняет пароль только как Argon2-хеш', async () => {
@@ -504,6 +552,21 @@ describe('Stage 1 end-to-end', () => {
       .expect(200);
     expect(creatorOffer.body.imageUrl).toEqual(expect.any(String));
     expect((await fetch(creatorOffer.body.imageUrl)).ok).toBe(true);
+
+    const publicCatalog = await request(app.getHttpServer())
+      .get('/api/public/offers')
+      .expect(200);
+    const publicOffer = publicCatalog.body.find((offer: { id: string }) => offer.id === created.body.id);
+    expect(publicOffer.imageUrl).toEqual(expect.any(String));
+    const publicImage = await fetch(publicOffer.imageUrl);
+    expect(publicImage.ok).toBe(true);
+    expect(Buffer.from(await publicImage.arrayBuffer())).toEqual(replacementFile);
+    expect(publicOffer).not.toHaveProperty('image');
+    expect(publicOffer).not.toHaveProperty('imageId');
+    expect(publicOffer).not.toHaveProperty('storageObjectKey');
+    expect(publicOffer).not.toHaveProperty('platformCommissionBps');
+    expect(publicOffer).not.toHaveProperty('currentCommercialTermsId');
+    expect(publicCatalog.body.every((offer: { status: string }) => offer.status === 'PUBLISHED')).toBe(true);
 
     await app.close();
     app = await createApplication();
@@ -1043,4 +1106,52 @@ describe('Stage 1 end-to-end', () => {
     });
     expect(persisted?.application.status).toBe('APPROVED');
   });
+  it('requires fresh brand acceptance on launch and resume, and persists the reviewed terms', async () => {
+    const owner = await loginAgent(brand.email, brand.password);
+    const outsider = await loginAgent(otherBrand.email, otherBrand.password);
+    const config = app.get(ConfigService);
+    const settings = {
+      LEGAL_BRAND_OFFER_REVISION: 'e2e-brand-v1',
+      LEGAL_BRAND_OFFER_SHA256: 'a'.repeat(64),
+    };
+    const previous = Object.keys(settings).map(key => [key, config.get<string>(key) ?? ''] as const);
+    for (const [key, value] of Object.entries(settings)) config.set(key, value);
+    try {
+      const { body: created } = await owner.agent.post('/api/brand/offers')
+        .set(authHeader(owner.token)).send({ ...offerPayload, title: 'Условия запуска E2E' }).expect(201);
+      const path = `/api/brand/offers/${created.id}`;
+      const review = () => owner.agent.get(`${path}/publish-review`).set(authHeader(owner.token));
+      const publish = () => owner.agent.post(`${path}/publish`).set(authHeader(owner.token));
+      await outsider.agent.get(`${path}/publish-review`).set(authHeader(outsider.token)).expect(403);
+      await publish().expect(409);
+      const { body: initial } = await review().expect('Cache-Control', 'no-store').expect(200);
+      await owner.agent.post(`${path}/commercial-terms`).set(authHeader(owner.token))
+        .send({ totalCommissionPoolBps: 1500 }).expect(201);
+      await publish().send({ accepted: true, reviewHash: initial.reviewHash }).expect(409);
+      expect(await prisma.auditLog.count({ where: { entityId: created.id, action: 'OFFER_LAUNCH_TERMS_ACCEPTED' } })).toBe(0);
+      const { body: current } = await review().expect(200);
+      expect(current.card.example).toEqual({ base: '100000', creator: '9750', platform: '5250' });
+      await publish().send({ accepted: false, reviewHash: current.reviewHash }).expect(409);
+      await publish().send({ accepted: true, reviewHash: current.reviewHash }).expect(201);
+      const recorded = await prisma.auditLog.findFirstOrThrow({
+        where: { entityId: created.id, action: 'OFFER_LAUNCH_TERMS_ACCEPTED' },
+        include: { actor: { select: { email: true } } },
+      });
+      expect(recorded.actor?.email).toBe(brand.email);
+      expect(recorded.metadata).toMatchObject({
+        commercialTermsVersionId: current.card.id, commercialTermsFingerprint: current.card.fingerprint,
+        document: current.document, nextStatus: 'PUBLISHED',
+      });
+      await owner.agent.post(`${path}/commercial-terms`).set(authHeader(owner.token))
+        .send({ totalCommissionPoolBps: 1600 }).expect(409);
+      await owner.agent.post(`${path}/pause`).set(authHeader(owner.token)).expect(201);
+      await publish().send({ accepted: true, reviewHash: current.reviewHash }).expect(409);
+      const { body: resumed } = await review().expect(200);
+      await publish().send({ accepted: true, reviewHash: resumed.reviewHash }).expect(201);
+    } finally {
+      for (const [key, value] of previous) config.set(key, value);
+    }
+  });
+
+
 });

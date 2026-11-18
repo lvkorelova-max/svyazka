@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -53,9 +54,39 @@ export class AuthService {
     private readonly audit: AuditService,
   ) {}
 
+  registrationTerms() {
+    const revision = this.config.get<string>('LEGAL_REGISTRATION_REVISION');
+    if (!revision) return { required: false } as const;
+
+    const agreementHash = this.config.get<string>('LEGAL_USER_AGREEMENT_SHA256');
+    const creatorTermsHash = this.config.get<string>('LEGAL_CREATOR_TERMS_SHA256');
+    const validHash = (value: string | undefined): value is string => !!value && /^[0-9a-f]{64}$/.test(value);
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(revision) || !validHash(agreementHash) || !validHash(creatorTermsHash)) {
+      throw new ServiceUnavailableException('Условия регистрации временно недоступны');
+    }
+
+    const path = `/legal/archive/${revision}`;
+    return {
+      required: true,
+      revision,
+      agreement: { url: `${path}/01_user_agreement.html`, sha256: agreementHash },
+      creatorTerms: { url: `${path}/03_creator_terms.html`, sha256: creatorTermsHash },
+    } as const;
+  }
+
   async register(dto: RegisterDto, metadata: SessionMetadata) {
     if (!([UserRole.BRAND, UserRole.CREATOR] as string[]).includes(dto.role)) {
       throw new UnauthorizedException('Эта роль недоступна для регистрации');
+    }
+    const terms = this.registrationTerms();
+    if (terms.required) {
+      if (dto.legalRevision !== terms.revision) {
+        throw new ConflictException('Условия регистрации изменились. Откройте актуальную редакцию.');
+      }
+      if (dto.userAgreementAccepted !== true ||
+          (dto.role === UserRole.CREATOR && dto.creatorTermsAccepted !== true)) {
+        throw new BadRequestException('Примите условия для выбранной роли');
+      }
     }
     const existing = await this.prisma.user.findUnique({ where: { email: dto.email } });
     if (existing) throw new ConflictException('Email уже зарегистрирован');
@@ -70,6 +101,23 @@ export class AuthService {
       } else {
         await tx.creatorProfile.create({
           data: { userId: created.id, displayName: dto.name.trim() },
+        });
+      }
+      if (terms.required) {
+        await tx.auditLog.create({
+          data: {
+            actorUserId: created.id,
+            action: 'REGISTRATION_TERMS_ACCEPTED',
+            entityType: 'User',
+            entityId: created.id,
+            requestId: this.audit.requestId(),
+            metadata: {
+              method: 'EXPLICIT_CHECKBOX',
+              revision: terms.revision,
+              role: dto.role,
+              documents: dto.role === UserRole.CREATOR ? [terms.agreement, terms.creatorTerms] : [terms.agreement],
+            },
+          },
         });
       }
       return created;
