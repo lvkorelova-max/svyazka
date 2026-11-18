@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$EUID" == 0 ]] || { echo 'Нужен root'; exit 1; }
+docker exec -i svyazka-production-backend-1 node <<'JS'
+const { PrismaClient, Prisma } = require("@prisma/client");
+const { ConfigService } = require("@nestjs/config");
+const { CommercialTermsService } = require("./dist/src/commercial-terms/commercial-terms.service.js");
+const { randomUUID } = require("node:crypto");
+const db = new PrismaClient();
+const offerId = "fbe2455e-2992-479c-b689-6c1c100b6501";
+const brandId = "7fb03a58-8bad-45c4-872b-4d31bf8955da";
+const oldTermsId = "970c9efe-49d6-4920-a44d-ea71f5550b1f";
+const requestId = "threshold-maintenance-" + randomUUID();
+const stable = value => JSON.stringify(value, (_, v) => typeof v === "bigint" ? v.toString() : v);
+const config = new ConfigService();
+(async () => {
+  if (!config.get("LEGAL_BRAND_OFFER_REVISION")) throw Error("LEGAL_ACCEPTANCE_NOT_ACTIVE");
+  const result = await db.$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM "Offer" WHERE id = ${offerId}::uuid FOR UPDATE`;
+    const offer = await tx.offer.findUnique({
+      where: { id: offerId },
+      include: { brand: { select: { userId: true } }, currentCommercialTerms: true,
+        creatorKit: { select: { activeRevisionId: true } } }
+    });
+    const old = offer?.currentCommercialTerms;
+    if (!offer || offer.brandId !== brandId || offer.title.trim() !== "BYSOLA 18PRO" ||
+        offer.status !== "PUBLISHED" || old?.id !== oldTermsId || old.version !== 1 ||
+        old.minimumPayoutMinor !== 50000n || old.currency !== "RUB" ||
+        old.calculationPolicy !== "POOL_65_35_V1") throw Error("EXPECTED_OFFER_STATE_CHANGED");
+    const oldSnapshot = stable(old);
+    // Record the support operation as SYSTEM, not as a browser acceptance.
+    const auditTx = new Proxy(tx, {
+      get(target, key) {
+        if (key !== "auditLog") return Reflect.get(target, key);
+        return { create: args => tx.auditLog.create({
+          ...args, data: { ...args.data, actorUserId: null, actorType: "SYSTEM",
+            metadata: { ...args.data.metadata, method: "ROOT_MAINTENANCE", authorization: "OWNER_CHAT_REQUEST",
+              brandOwnerUserId: offer.brand.userId } }
+        }) };
+      }
+    });
+    const service = new CommercialTermsService(
+      { $transaction: fn => fn(auditTx) }, config, { requestId: () => requestId }
+    );
+    const paused = await tx.offer.update({ where: { id: offerId }, data: { status: "PAUSED" },
+      include: { creatorKit: { select: { activeRevisionId: true } } } });
+    const version = await service.createOfferVersion(auditTx, paused, offer.brand.userId);
+    await tx.offer.update({ where: { id: offerId }, data: { currentOfferVersionId: version.id } });
+    const next = await service.updatePoolTerms(offer.brand.userId, offerId, {
+      totalCommissionPoolBps: old.totalCommissionPoolBps, minimumPayoutMinor: 100000
+    });
+    for (const key of Object.keys(old).filter(key => key.endsWith("Snapshot") ||
+      ["currency", "calculationPolicy", "totalCommissionPoolBps", "creatorPoolShareBps",
+       "platformPoolShareBps", "creatorEffectiveGmvBps", "platformEffectiveGmvBps"].includes(key))) {
+      if (stable(next[key]) !== stable(old[key])) throw Error("UNEXPECTED_TERMS_CHANGE:" + key);
+    }
+    if (next.minimumPayoutMinor !== 100000n || next.version !== 2) throw Error("NEW_THRESHOLD_NOT_VERIFIED");
+    const preserved = await tx.commercialTermsVersion.findUnique({ where: { id: oldTermsId } });
+    if (stable(preserved) !== oldSnapshot) throw Error("HISTORICAL_TERMS_CHANGED");
+    await tx.auditLog.create({ data: {
+      actorType: "SYSTEM", action: "OFFER_PAYOUT_THRESHOLD_MAINTENANCE", entityType: "Offer",
+      entityId: offerId, requestId, metadata: {
+        method: "ROOT_MAINTENANCE", authorization: "OWNER_CHAT_REQUEST",
+        previousStatus: "PUBLISHED", nextStatus: "PAUSED",
+        previousTermsId: old.id, nextTermsId: next.id,
+        previousMinimumPayoutMinor: "50000", nextMinimumPayoutMinor: "100000",
+        requiresOwnerLaunchAcceptance: true
+      }
+    } });
+    return { title: offer.title.trim(), status: "PAUSED", termsVersion: next.version,
+      minimumPayoutRub: 1000, historicalTermsPreserved: true };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 20000 });
+  console.log(JSON.stringify(result, null, 2));
+  console.log("BYSOLA_THRESHOLD_1000_OK");
+})().catch(error => {
+  console.error(JSON.stringify({ status: "NOT_APPLIED", code: error.code ?? null, message: error.message }));
+  process.exitCode = 1;
+}).finally(() => db.$disconnect());
+JS
