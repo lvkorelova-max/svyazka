@@ -29,6 +29,11 @@ export class Stage8FlagsService {
     return this.enabled("STAGE8_FINANCE_HANDOFF_ENABLED");
   }
 
+  retentionMode() {
+    const value = this.config.get<string>("STAGE8_RETENTION_MODE");
+    return value === "preview" || value === "apply" ? value : "off";
+  }
+
   private enabled(key: string) {
     return this.config.get<string>(key) === "true";
   }

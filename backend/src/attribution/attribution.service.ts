@@ -1,3 +1,4 @@
+import { RetentionMode, runStage8Retention } from "./stage8-retention";
 import {
   BadRequestException,
   ConflictException,
@@ -1365,26 +1366,12 @@ export class AttributionService {
     return { escalated: result.count };
   }
 
-  async purgeExpiredRetentionData() {
-    const trackingBefore = new Date();
-    trackingBefore.setUTCMonth(trackingBefore.getUTCMonth() - 13);
-    const payloadBefore = new Date();
-    payloadBefore.setUTCMonth(payloadBefore.getUTCMonth() - 24);
-    const [tracking, payloads] = await this.prisma.$transaction([
-      this.prisma.trackingEvent.deleteMany({
-        where: { receivedAt: { lt: trackingBefore } },
-      }),
-      this.prisma.$executeRaw`
-        UPDATE "Stage8OrderEvent"
-        SET "payload" = '{"redactedByRetention":true}'::jsonb
-        WHERE "receivedAt" < ${payloadBefore}
-          AND "payload" <> '{"redactedByRetention":true}'::jsonb
-      `,
-    ]);
-    return {
-      trackingEventsDeleted: tracking.count,
-      orderPayloadsSanitized: payloads,
-    };
+  purgeExpiredRetentionData(now?: Date) {
+    return this.runRetention("apply", now);
+  }
+
+  runRetention(mode: RetentionMode, now?: Date) {
+    return runStage8Retention(this.prisma, mode, now);
   }
 
   private async authenticateWebhook(input: {

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Header, Param, ParseUUIDPipe, Patch, Post, UseGuards } from '@nestjs/common';
 import { OfferStatus, UserRole } from '@prisma/client';
 import { AuthenticatedUser } from '../auth/auth.types';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -13,6 +13,7 @@ import { CreateOfferDto } from './dto/create-offer.dto';
 import { InitOfferImageUploadDto } from './dto/init-offer-image-upload.dto';
 import { UpdateOfferDto } from './dto/update-offer.dto';
 import { UpdateCommercialTermsDto } from './dto/update-commercial-terms.dto';
+import { PublishOfferDto } from './dto/publish-offer.dto';
 import { OffersService } from './offers.service';
 
 @Controller()
@@ -87,14 +88,26 @@ export class OffersController {
     return this.offers.completeImageUpload(user.id, offerId, uploadId, brandId);
   }
 
+  @Get('brand/offers/:id/publish-review')
+  @Header('Cache-Control', 'no-store')
+  @Roles(UserRole.BRAND, UserRole.MANAGER)
+  publishReview(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) offerId: string,
+    @ActiveBrandId() brandId: string,
+  ) {
+    return this.offers.publishReview(user.id, offerId, brandId);
+  }
+
   @Post('brand/offers/:id/publish')
   @Roles(UserRole.BRAND, UserRole.MANAGER)
   publish(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) offerId: string,
     @ActiveBrandId() brandId: string,
+    @Body() dto?: PublishOfferDto,
   ) {
-    return this.offers.transition(user.id, offerId, OfferStatus.PUBLISHED, brandId);
+    return this.offers.transition(user.id, offerId, OfferStatus.PUBLISHED, brandId, dto);
   }
 
   @Post('brand/offers/:id/pause')

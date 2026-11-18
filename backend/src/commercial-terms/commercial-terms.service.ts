@@ -7,6 +7,7 @@ import {
   NotificationEventStatus,
   NotificationEventType,
   Offer,
+  OfferStatus,
   Prisma,
 } from '@prisma/client';
 import { createHash } from 'crypto';
@@ -149,6 +150,12 @@ export class CommercialTermsService {
     });
   }
 
+  private assertTermsEditable(status: OfferStatus) {
+    if (this.config.get<string>('LEGAL_BRAND_OFFER_REVISION') && status === OfferStatus.PUBLISHED) {
+      throw new ConflictException('Приостановите оффер, чтобы изменить и повторно подтвердить коммерческие условия');
+    }
+  }
+
   async updatePoolTerms(
     actorUserId: string,
     offerId: string,
@@ -173,6 +180,7 @@ export class CommercialTermsService {
         const nextInput = this.mergeTermsInput(current, dto);
         const nextFingerprint = this.hash(this.poolFingerprintInput(nextInput));
         if (current?.contractFingerprint === nextFingerprint) return current;
+        this.assertTermsEditable(offer.status);
         const next = await this.createPoolTermsVersion(
           tx,
           offer.id,
@@ -256,6 +264,7 @@ export class CommercialTermsService {
         if (offer.currentCommercialTerms?.contractFingerprint === fingerprint) {
           return offer.currentCommercialTerms;
         }
+        this.assertTermsEditable(offer.status);
         const latest = await tx.commercialTermsVersion.aggregate({
           where: { offerId },
           _max: { version: true },

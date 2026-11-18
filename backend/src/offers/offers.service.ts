@@ -1,10 +1,12 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
   Optional,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -14,15 +16,17 @@ import {
   OfferStatus,
   Prisma,
 } from '@prisma/client';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { extname } from 'path';
 import { AuditService } from '../audit/audit.service';
 import { BrandAccessService } from '../brand-access/brand-access.service';
 import { CommercialTermsService } from '../commercial-terms/commercial-terms.service';
+import { calculateFinancialAmounts } from '../finance/finance-calculation';
 import { PrismaService } from '../prisma/prisma.service';
 import { S3StorageService } from '../storage/storage.service';
 import { CreateOfferDto } from './dto/create-offer.dto';
 import { InitOfferImageUploadDto } from './dto/init-offer-image-upload.dto';
+import { PublishOfferDto } from './dto/publish-offer.dto';
 import { UpdateOfferDto } from './dto/update-offer.dto';
 import { UpdateCommercialTermsDto } from './dto/update-commercial-terms.dto';
 
@@ -256,34 +260,130 @@ export class OffersService {
     return this.presentOffer(updated);
   }
 
-  async transition(userId: string, offerId: string, target: OfferStatus, activeBrandId?: string) {
+  private launchDocument() {
+    const revision = this.config.get<string>('LEGAL_BRAND_OFFER_REVISION');
+    if (!revision) return null;
+    const sha256 = this.config.get<string>('LEGAL_BRAND_OFFER_SHA256');
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(revision) || !sha256 || !/^[a-f0-9]{64}$/.test(sha256)) {
+      throw new ServiceUnavailableException('Версия оферты для брендов недоступна');
+    }
+    return { revision, sha256, url: `/legal/brand-offer-archive/${revision}/02_brand_offer.html` };
+  }
+
+  private launchReview(userId: string, offer: OfferWithImage) {
+    const document = this.launchDocument();
+    if (!document) return { required: false } as const;
+    if (offer.brand.userId !== userId) {
+      throw new ForbiddenException('Оферту и коммерческие условия подтверждает владелец бренда');
+    }
+    const terms = offer.currentCommercialTerms;
+    if (!terms || !offer.currentVersion || !this.commercialTerms) {
+      throw new ConflictException('У оффера нет версии коммерческих условий для подтверждения');
+    }
+    const exampleBase = 100_000n;
+    const example = calculateFinancialAmounts(exampleBase, terms);
+    const card = {
+      id: terms.id,
+      version: terms.version,
+      fingerprint: terms.contractFingerprint,
+      calculationPolicy: terms.calculationPolicy,
+      totalCommissionPoolBps: terms.totalCommissionPoolBps,
+      creatorPoolShareBps: terms.creatorPoolShareBps,
+      platformPoolShareBps: terms.platformPoolShareBps,
+      creatorEffectiveGmvBps: terms.creatorEffectiveGmvBps,
+      platformEffectiveGmvBps: terms.platformEffectiveGmvBps,
+      minimumPayoutMinor: terms.minimumPayoutMinor.toString(),
+      currency: terms.currency,
+      example: { base: exampleBase.toString(), creator: example.creator.toString(), platform: example.platform.toString() },
+      attributionWindow: terms.attributionWindowSnapshot,
+      commissionEligibility: terms.commissionEligibilitySnapshot,
+      confirmationPolicy: terms.confirmationPolicySnapshot,
+      payoutSchedule: terms.payoutScheduleSnapshot,
+    };
+    const reviewHash = createHash('sha256').update(JSON.stringify([
+      userId, offer.brandId, offer.id, offer.status, offer.currentOfferVersionId,
+      terms.id, terms.contractFingerprint, document,
+    ])).digest('hex');
+    return { required: true, document, card, reviewHash, title: offer.title, offerVersionId: offer.currentVersion.id } as const;
+  }
+
+  async publishReview(userId: string, offerId: string, activeBrandId?: string) {
+    const offer = await this.getOwnedOffer(userId, offerId, activeBrandId);
+    if (!ALLOWED_TRANSITIONS[offer.status].includes(OfferStatus.PUBLISHED)) {
+      throw new BadRequestException('Оффер нельзя опубликовать в текущем статусе');
+    }
+    return this.launchReview(userId, offer);
+  }
+
+  async transition(userId: string, offerId: string, target: OfferStatus, activeBrandId?: string, confirmation?: PublishOfferDto) {
     const offer = await this.getOwnedOffer(userId, offerId, activeBrandId);
     if (!ALLOWED_TRANSITIONS[offer.status].includes(target)) {
       throw new BadRequestException(`Переход ${offer.status} → ${target} недоступен`);
     }
     if (target === OfferStatus.PUBLISHED) {
       this.assertPublishableProductUrl(offer.productUrl);
+
     }
+    const review = target === OfferStatus.PUBLISHED ? this.launchReview(userId, offer) : null;
+    if (review?.required && (confirmation?.accepted !== true || confirmation.reviewHash !== review.reviewHash)) {
+      throw new ConflictException('Откройте актуальные условия запуска оффера и подтвердите их');
+    }
+    const guardPublish = review?.required;
     const updated = this.commercialTerms && (this.prisma as any).$transaction
       ? await this.prisma.$transaction(async (tx) => {
           const changed = await tx.offer.update({
-            where: { id: offer.id },
+            where: {
+              id: offer.id,
+              ...(guardPublish ? {
+                status: offer.status,
+                AND: {
+                  currentOfferVersionId: offer.currentOfferVersionId,
+                  currentCommercialTermsId: offer.currentCommercialTermsId,
+                },
+              } : {}),
+            },
             data: { status: target },
             include: this.offerInclude,
           });
           const nextVersion = await this.commercialTerms!.createOfferVersion(tx, changed, userId);
+          if (review?.required) {
+            await tx.auditLog.create({ data: {
+              actorUserId: userId,
+              action: 'OFFER_LAUNCH_TERMS_ACCEPTED',
+              entityType: 'Offer',
+              entityId: offer.id,
+              requestId: this.audit.requestId(),
+              metadata: {
+                brandId: offer.brandId,
+                reviewedOfferVersionId: review.offerVersionId,
+                publishedOfferVersionId: nextVersion.id,
+                document: review.document,
+                commercialTermsVersionId: review.card.id,
+                commercialTermsVersion: review.card.version,
+                commercialTermsFingerprint: review.card.fingerprint,
+                reviewHash: review.reviewHash,
+                previousStatus: offer.status,
+                nextStatus: target,
+              },
+            } });
+          }
           return tx.offer.update({
             where: { id: offer.id },
             data: { currentOfferVersionId: nextVersion.id },
             include: this.offerInclude,
           });
+        }).catch(error => {
+          if (guardPublish && error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+            throw new ConflictException('Оффер изменился. Откройте условия запуска заново');
+          }
+          throw error;
         })
       : await this.prisma.offer.update({
           where: { id: offer.id },
           data: { status: target },
           include: this.offerInclude,
         });
-    await this.audit.record({
+    if (!review?.required) await this.audit.record({
       actorUserId: userId,
       action: 'OFFER_STATUS_CHANGED',
       entityType: 'Offer',
@@ -510,7 +610,7 @@ export class OffersService {
   }
 
   async listPublicPublished() {
-    return this.prisma.offer.findMany({
+    const offers = await this.prisma.offer.findMany({
       where: { status: OfferStatus.PUBLISHED },
       select: {
         id: true,
@@ -522,6 +622,9 @@ export class OffersService {
         promotionWithoutProduct: true,
         category: true,
         imageUrl: true,
+        image: {
+          select: { status: true, storageObjectKey: true, mimeType: true },
+        },
         productRequirementSales: true,
         allowedPromotionFormats: true,
         status: true,
@@ -537,6 +640,12 @@ export class OffersService {
       },
       orderBy: { createdAt: 'desc' },
     });
+    return Promise.all(offers.map(async ({ image, ...offer }) => ({
+      ...offer,
+      imageUrl: image?.status === OfferImageStatus.READY && this.storage
+        ? await this.storage.createViewUrl(image.storageObjectKey, image.mimeType)
+        : offer.imageUrl,
+    })));
   }
 
   async getPublished(offerId: string) {

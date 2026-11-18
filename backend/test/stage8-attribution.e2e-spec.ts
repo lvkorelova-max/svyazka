@@ -1676,6 +1676,7 @@ describe("Stage 8 sales attribution engine", () => {
       },
     });
     const result = await attribution.purgeExpiredRetentionData();
+    if (result.mode !== "apply") throw new Error("Expected apply retention mode");
     expect(result.trackingEventsDeleted).toBeGreaterThan(0);
     expect(
       await prisma.trackingEvent.findUnique({ where: { id: oldTracking.id } }),

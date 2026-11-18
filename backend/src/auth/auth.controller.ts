@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   HttpCode,
   Post,
   Req,
@@ -34,6 +35,12 @@ export class AuthController {
     private readonly auth: AuthService,
     private readonly config: ConfigService,
   ) {}
+
+  @Get('registration-terms')
+  @Header('Cache-Control', 'no-store')
+  registrationTerms() {
+    return this.auth.registrationTerms();
+  }
 
   @Post('register')
   @RateLimit({ scope: 'auth-register', limit: 20, windowSeconds: 900 })

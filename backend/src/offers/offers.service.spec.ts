@@ -1,4 +1,4 @@
-import { OfferStatus, UserRole } from '@prisma/client';
+import { OfferImageStatus, OfferStatus, UserRole } from '@prisma/client';
 import { BrandAccessService } from '../brand-access/brand-access.service';
 import { OffersService } from './offers.service';
 
@@ -12,7 +12,7 @@ describe('OffersService manager brand authorization', () => {
     },
     user: { findUnique: jest.fn() },
   } as any;
-  const config = { get: jest.fn(() => '500') } as any;
+  const config = { get: jest.fn((key: string) => key === 'PLATFORM_COMMISSION_BPS' ? '500' : undefined) } as any;
   const audit = { record: jest.fn() } as any;
   const brands = {
     resolveBrand: jest.fn(),
@@ -209,6 +209,52 @@ describe('OffersService manager brand authorization', () => {
         currentManager: { id: 'manager-a', displayName: 'Manager A' },
       }),
     ]);
+  });
+
+  it('serves a signed READY image in the guest catalog without leaking image metadata', async () => {
+    const storage = { createViewUrl: jest.fn().mockResolvedValue('https://files.example.test/signed-photo') } as any;
+    prisma.offer.findMany.mockResolvedValue([{
+      id: 'photo-offer', title: 'Uploaded photo', imageUrl: null,
+      image: { status: OfferImageStatus.READY, storageObjectKey: 'private/object.png', mimeType: 'image/png' },
+    }]);
+    const service = new OffersService(prisma, config, audit, brands, undefined, storage);
+    const result = await service.listPublicPublished();
+    expect(result[0].imageUrl).toBe('https://files.example.test/signed-photo');
+    expect(storage.createViewUrl).toHaveBeenCalledWith('private/object.png', 'image/png');
+    expect(result[0]).not.toHaveProperty('image');
+    expect(result[0]).not.toHaveProperty('storageObjectKey');
+  });
+
+  it.each([OfferImageStatus.UPLOADING, OfferImageStatus.FAILED, OfferImageStatus.SUPERSEDED, OfferImageStatus.DELETED])('does not expose a %s image to guests', async status => {
+    const storage = { createViewUrl: jest.fn() } as any;
+    prisma.offer.findMany.mockResolvedValue([{
+      id: 'photo-offer', imageUrl: null,
+      image: { status, storageObjectKey: 'private/object.png', mimeType: 'image/png' },
+    }]);
+    const service = new OffersService(prisma, config, audit, brands, undefined, storage);
+    const result = await service.listPublicPublished();
+    expect(result[0].imageUrl).toBeNull();
+    expect(result[0]).not.toHaveProperty('image');
+    expect(storage.createViewUrl).not.toHaveBeenCalled();
+  });
+
+  it('preserves legacy public image URLs', async () => {
+    prisma.offer.findMany.mockResolvedValue([{ id: 'legacy', imageUrl: 'https://legacy.example.test/photo.png', image: null }]);
+    const service = new OffersService(prisma, config, audit, brands);
+    const result = await service.listPublicPublished();
+    expect(result[0].imageUrl).toBe('https://legacy.example.test/photo.png');
+    expect(result[0]).not.toHaveProperty('image');
+  });
+
+  it('omits private image metadata when storage is unavailable', async () => {
+    prisma.offer.findMany.mockResolvedValue([{
+      id: 'photo-offer', imageUrl: null,
+      image: { status: OfferImageStatus.READY, storageObjectKey: 'private/object.png', mimeType: 'image/png' },
+    }]);
+    const service = new OffersService(prisma, config, audit, brands);
+    const result = await service.listPublicPublished();
+    expect(result[0].imageUrl).toBeNull();
+    expect(result[0]).not.toHaveProperty('image');
   });
 
   it('lists only public fields for published guest offers', async () => {
