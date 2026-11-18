@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+(
+set -Eeuo pipefail
+[[ "$EUID" == 0 ]]
+ctl=/usr/local/sbin/svyazka-deployctl
+commit=7694ca8b70e54518fa801b2a73eee7d2634c8e5f
+release=bysola-default-7694ca8
+previous="$(readlink -f /opt/svyazka/current)"
+next="/opt/svyazka/releases/$release"
+[[ "$previous" == /opt/svyazka/releases/* ]]
+[[ "$(cat "$previous/COMMIT_SHA")" == 548b6356ca589e4a7e5affbfaa7cbac748b659fe ]] || { echo 'Релиз изменился. Остановлено.'; exit 1; }
+[[ ! -e "$next" ]] || { echo 'Каталог релиза уже существует. Остановлено.'; exit 1; }
+"$ctl" preflight
+curl -fsS --connect-timeout 10 --max-time 20 https://svyazka.pro/health/ready | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["status"]=="READY" and d["operational"]["backup"]["status"]=="READY"'
+work="$(mktemp -d /root/bysola-default-1000.XXXXXX)"
+curl -fsSL --connect-timeout 15 --max-time 180 "https://codeload.github.com/lvkorelova-max/svyazka/tar.gz/$commit" -o "$work/release.tar.gz"
+python3 - "$work/release.tar.gz" "$next" "$previous" "$commit" <<'PY'
+from pathlib import Path
+import tarfile,sys,shutil,re,json,urllib.request,html,hashlib
+archive,target,previous,commit=sys.argv[1:]
+target=Path(target);previous=Path(previous)
+with tarfile.open(archive) as tar:
+ members=tar.getmembers();prefix='svyazka-'+commit+'/'
+ if not members or any(not (m.name==prefix.rstrip('/') or m.name.startswith(prefix)) or m.issym() or m.islnk() or not (m.isfile() or m.isdir()) or '..' in Path(m.name).parts for m in members): raise SystemExit('Небезопасный архив')
+ target.mkdir()
+ for m in members:
+  rel=m.name[len(prefix):]
+  if not rel: continue
+  dest=target/rel
+  if m.isdir(): dest.mkdir(parents=True,exist_ok=True);continue
+  dest.parent.mkdir(parents=True,exist_ok=True)
+  with tar.extractfile(m) as src,dest.open('wb') as out: shutil.copyfileobj(src,out)
+  dest.chmod(0o755 if m.mode&0o111 else 0o644)
+(target/'COMMIT_SHA').write_text(commit+'\n')
+# Keep the accepted legal documents byte-for-byte; verify published copies too.
+for name in ['02_brand_offer.html','03_creator_terms.html']:
+ path=target/'frontend/public/legal'/name
+ expected=path.read_bytes()
+ if (previous/'frontend/public/legal'/name).read_bytes()!=expected: raise SystemExit('Документ изменился: '+name)
+ with urllib.request.urlopen('https://svyazka.pro/legal/'+name,timeout=25) as response: live=response.read()
+ if live!=expected: raise SystemExit('Публичная версия документа отличается: '+name)
+ text=html.unescape(re.sub('<[^>]*>',' ',live.decode()))
+ if re.search(r'(?<!\d)500(?:[\s\u00a0]*(?:[,\.]00))?\s*(?:₽|руб)|пятьсот',text,re.I): raise SystemExit('Найден старый порог: '+name)
+ print('LEGAL_NO_500_OK='+name)
+env=previous/'.env.production'
+if env.is_symlink() or not env.is_file(): raise SystemExit('Нет настроек')
+settings=env.read_text();key='BRAND_MINIMUM_PAYOUT_MINOR_OVERRIDES'
+pattern=r'(?m)^\s*(?:export\s+)?'+key+r'\s*=.*$'
+found=re.findall(pattern,settings)
+if len(found)>1: raise SystemExit('Дубли настроек')
+values=json.loads(found[0].split('=',1)[1].strip().strip("'\"")) if found and found[0].split('=',1)[1].strip().strip("'\"") else {}
+if not isinstance(values,dict): raise SystemExit('Некорректная настройка')
+values['7fb03a58-8bad-45c4-872b-4d31bf8955da']=100000
+line=key+"='"+json.dumps(values,separators=(',',':'))+"'"
+settings=re.sub(pattern,lambda m:line,settings) if found else settings.rstrip()+'\n'+line+'\n'
+(target/'.env.production').write_text(settings);(target/'.env.production').chmod(0o600)
+PY
+"$ctl" validate "$release"
+image="$(docker inspect --format '{{.Config.Image}}' svyazka-production-backend-1)"
+[[ "$image" == svyazka-production-backend || "$image" == svyazka-production-backend:latest ]]
+rollback_tag="rollback-$commit"
+"$ctl" preserve-image backend "$rollback_tag"
+attempted=false
+rollback() {
+ code=$?; trap - ERR
+ docker tag "svyazka-production-backend:$rollback_tag" "$image"
+ if [[ "$attempted" == true ]]; then "$ctl" activate "$(basename "$previous")" backend || echo 'Проверьте восстановление backend'; fi
+ echo "BYSOLA_DEFAULT_FAILED; preparation=$work"
+ exit "$code"
+}
+trap rollback ERR
+"$ctl" build "$release" migration backend
+# Test the actual compiled helper in the new image, without DB access or test orders.
+docker run --rm --network none -i --entrypoint node "$image" <<'JS'
+const assert=require('node:assert/strict');
+const {brandPayoutDefault:f}=require('./dist/src/commercial-terms/brand-payout-default.js');
+const b='7fb03a58-8bad-45c4-872b-4d31bf8955da';
+assert.equal(f(JSON.stringify({[b]:100000}),b),100000);
+assert.equal(f(JSON.stringify({[b]:100000}),'00000001-0000-4000-8000-000000000000'),undefined);
+assert.equal(f(undefined,b),undefined);
+for(const v of ['{','[]','null','{"bad":100000}',JSON.stringify({[b]:-1}),JSON.stringify({[b]:1.5}),JSON.stringify({[b]:'100000'})]) assert.throws(()=>f(v,b));
+console.log('BYSOLA_COMPILED_DEFAULT_TESTS_OK');
+JS
+"$ctl" migrate "$release"
+[[ "$(readlink -f /opt/svyazka/current)" == "$previous" ]]
+attempted=true
+"$ctl" activate "$release" backend
+healthy=false
+for attempt in {1..40}; do
+ if [[ "$(docker inspect --format '{{.State.Health.Status}}' svyazka-production-backend-1)" == healthy ]]; then healthy=true;break;fi
+ sleep 2
+done
+[[ "$healthy" == true ]]
+docker exec -i svyazka-production-backend-1 node <<'JS'
+const assert=require('node:assert/strict');
+const {brandPayoutDefault:f}=require('./dist/src/commercial-terms/brand-payout-default.js');
+assert.equal(f(process.env.BRAND_MINIMUM_PAYOUT_MINOR_OVERRIDES,'7fb03a58-8bad-45c4-872b-4d31bf8955da'),100000);
+console.log('BYSOLA_DEFAULT_ENV_VERIFIED');
+JS
+curl -fsS --connect-timeout 10 --max-time 20 https://svyazka.pro/health/ready | python3 -c 'import json,sys; assert json.load(sys.stdin)["status"]=="READY"'
+"$ctl" preflight
+trap - ERR
+echo BYSOLA_NEW_OFFERS_DEFAULT_1000_OK
+)
