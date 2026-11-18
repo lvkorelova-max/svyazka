@@ -12,6 +12,7 @@ import {
 } from '@prisma/client';
 import { createHash } from 'crypto';
 import { AuditService } from '../audit/audit.service';
+import { brandPayoutDefault } from './brand-payout-default';
 import {
   COMMISSION_SCOPE,
   normalizeCommissionEligibility,
@@ -60,6 +61,7 @@ export class CommercialTermsService {
       legacyPlatformBps?: number;
     },
   ) {
+    const minimum = brandPayoutDefault(this.config.get<string>('BRAND_MINIMUM_PAYOUT_MINOR_OVERRIDES'), offer.brandId);
     const offerVersion = await this.createOfferVersion(tx, offer, actorUserId);
     const terms =
       mode.totalCommissionPoolBps !== undefined
@@ -67,7 +69,7 @@ export class CommercialTermsService {
             tx,
             offer.id,
             actorUserId,
-            { totalCommissionPoolBps: mode.totalCommissionPoolBps },
+            { totalCommissionPoolBps: mode.totalCommissionPoolBps, ...(minimum === undefined ? {} : { minimumPayoutMinor: minimum }) },
             1,
           )
         : await this.createLegacyTermsVersion(
@@ -77,6 +79,7 @@ export class CommercialTermsService {
             mode.legacyCreatorBps ?? offer.creatorCommissionBps,
             mode.legacyPlatformBps ?? offer.platformCommissionBps,
             1,
+            minimum ?? 0,
           );
     await tx.offer.update({
       where: { id: offer.id },
@@ -379,9 +382,11 @@ export class CommercialTermsService {
     creatorBps: number,
     platformBps: number,
     version: number,
+    minimumPayoutMinor = 0,
   ) {
     const fingerprintInput = {
       calculationPolicy: CommercialCalculationPolicy.LEGACY_DIRECT_RATES_V1,
+      ...(minimumPayoutMinor ? { minimumPayoutMinor } : {}),
       creatorBps,
       platformBps,
       currency: 'RUB',
@@ -419,7 +424,7 @@ export class CommercialTermsService {
         payoutPolicySnapshot: { source: 'LEGACY', method: 'MANUAL' },
         payoutScheduleSnapshot: { source: 'LEGACY', schedule: 'MANUAL' },
         settlementModelSnapshot: { source: 'LEGACY', model: 'MANUAL' },
-        minimumPayoutMinor: 0n,
+        minimumPayoutMinor: BigInt(minimumPayoutMinor),
         contractFingerprint: this.hash(fingerprintInput),
         createdByUserId: actorUserId,
         requestId: this.audit.requestId(),
