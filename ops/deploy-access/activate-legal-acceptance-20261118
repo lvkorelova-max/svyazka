@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+(
+set -Eeuo pipefail
+ctl=/usr/local/sbin/svyazka-deployctl
+base=381da4f9728339d1ba337a9e93dad15820b5dc6b
+commit=548b6356ca589e4a7e5affbfaa7cbac748b659fe
+release=legal-acceptance-548b635
+previous="$(readlink -f /opt/svyazka/current)"
+next="/opt/svyazka/releases/$release"
+[[ "$EUID" == 0 && "$previous" == /opt/svyazka/releases/* ]]
+[[ "$(cat "$previous/COMMIT_SHA")" == "$base" ]] || { echo 'Релиз изменился. Остановлено.'; exit 1; }
+[[ ! -e "$next" ]] || { echo 'Каталог релиза уже существует. Остановлено.'; exit 1; }
+"$ctl" preflight
+curl -fsS --connect-timeout 10 --max-time 20 https://svyazka.pro/health/ready |
+  python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["status"]=="READY" and d["operational"]["backup"]["status"]=="READY"'
+work="$(mktemp -d /root/svyazka-legal-activation.XXXXXX)"
+curl -fLSs --connect-timeout 15 --max-time 180   "https://codeload.github.com/lvkorelova-max/svyazka/tar.gz/$commit" -o "$work/release.tar.gz"
+python3 - "$work/release.tar.gz" "$next" "$previous" "$commit" <<'PY'
+from pathlib import Path
+import tarfile,sys,hashlib,re,urllib.request,os,shutil
+archive,target,previous,commit=sys.argv[1:]
+target=Path(target);previous=Path(previous)
+with tarfile.open(archive) as tar:
+ members=tar.getmembers()
+ prefix="svyazka-"+commit+"/"
+ if not members or any(not (m.name == prefix.rstrip("/") or m.name.startswith(prefix)) or m.issym() or m.islnk() or
+                       not (m.isfile() or m.isdir()) or ".." in Path(m.name).parts for m in members):
+  raise SystemExit("Неожиданный архив релиза")
+ target.mkdir(mode=0o755)
+ for member in members:
+  rel=member.name[len(prefix):]
+  if not rel: continue
+  dest=target/rel
+  if member.isdir(): dest.mkdir(parents=True,exist_ok=True);continue
+  dest.parent.mkdir(parents=True,exist_ok=True)
+  stream=tar.extractfile(member)
+  if stream is None: raise RuntimeError("Ошибка чтения архива")
+  with dest.open("wb") as out: shutil.copyfileobj(stream,out)
+  dest.chmod(0o755 if member.mode & 0o111 else 0o644)
+(target/"COMMIT_SHA").write_text(commit+"\n")
+env=previous/".env.production"
+if env.is_symlink() or not env.is_file(): raise SystemExit("Не найден файл настроек")
+settings=env.read_text()
+revision="2026-11-18-v1"
+public=target/"frontend/public/legal"
+hashes={}
+for p in sorted(public.glob("*.html")):
+ req=urllib.request.Request("https://svyazka.pro/legal/"+p.name,headers={"Cache-Control":"no-cache"})
+ with urllib.request.urlopen(req,timeout=20) as response: live=response.read()
+ expected=hashlib.sha256(p.read_bytes()).hexdigest()
+ if hashlib.sha256(live).hexdigest()!=expected: raise SystemExit("Опубликованный документ изменился: "+p.name)
+ hashes[p.name]=expected
+ if re.search(rb"\[[A-Z_]{3,}[^\]]*\]",live): raise SystemExit("Черновые поля в документе")
+values={
+ "LEGAL_REGISTRATION_REVISION":revision,
+ "LEGAL_USER_AGREEMENT_SHA256":hashes["01_user_agreement.html"],
+ "LEGAL_CREATOR_TERMS_SHA256":hashes["03_creator_terms.html"],
+ "LEGAL_BRAND_OFFER_REVISION":revision,
+ "LEGAL_BRAND_OFFER_SHA256":hashes["02_brand_offer.html"],
+}
+for key,value in values.items():
+ pattern=r"(?m)^\s*(?:export\s+)?"+key+r"=.*$"
+ found=re.findall(pattern,settings)
+ if len(found)>1: raise SystemExit("Дубли настроек "+key)
+ if found:
+  current=found[0].split("=",1)[1].strip().strip("'\"")
+  if current and current!=value: raise SystemExit("Уже настроена другая редакция "+key)
+  settings=re.sub(pattern,key+"="+value,settings)
+ else: settings=settings.rstrip()+"\n"+key+"="+value+"\n"
+(target/".env.production").write_text(settings)
+(target/".env.production").chmod(0o600)
+print("LEGAL_RELEASE_PREPARED="+str(target))
+PY
+"$ctl" validate "$release"
+backend=svyazka-production-backend-1
+frontend=svyazka-production-frontend-1
+backend_image="$(docker inspect --format '{{.Config.Image}}' "$backend")"
+frontend_image="$(docker inspect --format '{{.Config.Image}}' "$frontend")"
+[[ "$backend_image" == svyazka-production-backend || "$backend_image" == svyazka-production-backend:latest ]]
+[[ "$frontend_image" == svyazka-production-frontend || "$frontend_image" == svyazka-production-frontend:latest ]]
+rollback_tag="rollback-$commit"
+"$ctl" preserve-image backend "$rollback_tag"
+"$ctl" preserve-image frontend "$rollback_tag"
+attempted=false
+rollback() {
+  code=$?
+  trap - ERR
+  docker tag "svyazka-production-backend:$rollback_tag" "$backend_image"
+  docker tag "svyazka-production-frontend:$rollback_tag" "$frontend_image"
+  if [[ "$attempted" == true ]]; then
+    "$ctl" activate "$(basename "$previous")" backend frontend || echo 'Проверьте восстановление сервисов.'
+  fi
+  echo "LEGAL_ACTIVATION_FAILED: восстановлены прежние образы; журнал подготовки: $work"
+  exit "$code"
+}
+trap rollback ERR
+"$ctl" build "$release" migration backend frontend
+"$ctl" migrate "$release"
+[[ "$(readlink -f /opt/svyazka/current)" == "$previous" ]]
+attempted=true
+"$ctl" activate "$release" backend frontend
+healthy=false
+for attempt in {1..40}; do
+  if [[ "$(docker inspect --format '{{.State.Health.Status}}' "$backend")" == healthy ]] &&
+     [[ "$(docker inspect --format '{{.State.Health.Status}}' "$frontend")" == healthy ]]; then
+    healthy=true
+    break
+  fi
+  sleep 2
+done
+[[ "$healthy" == true ]]
+python3 - "$next" <<'PY'
+from pathlib import Path
+import sys,json,urllib.request,urllib.error,hashlib
+release=Path(sys.argv[1])
+origin="https://svyazka.pro"
+def get(path):
+ with urllib.request.urlopen(origin+path,timeout=20) as response:return response.read()
+terms=json.loads(get("/api/auth/registration-terms"))
+assert terms["required"] is True and terms["revision"]=="2026-11-18-v1"
+for doc in [terms["agreement"],terms["creatorTerms"]]:
+ assert hashlib.sha256(get(doc["url"])).hexdigest()==doc["sha256"]
+path="/legal/brand-offer-archive/2026-11-18-v1/02_brand_offer.html"
+assert get(path)==(release/"frontend/public"/path.lstrip("/")).read_bytes()
+candidate={"email":"legal-negative-probe@example.invalid","password":"SyntheticProbe2026","role":"CREATOR","name":"Legal Negative Probe"}
+for fields,status in [({},409),({"legalRevision":terms["revision"],"userAgreementAccepted":True},400)]:
+ req=urllib.request.Request(origin+"/api/auth/register",data=json.dumps({**candidate,**fields}).encode(),
+                           headers={"Content-Type":"application/json"},method="POST")
+ try:
+  with urllib.request.urlopen(req,timeout=20) as response: raise RuntimeError("Регистрация без условий не отклонена")
+ except urllib.error.HTTPError as error:
+  assert error.code==status,(error.code,status)
+ready=json.loads(get("/health/ready"))
+assert ready["status"]=="READY"
+print("LEGAL_NEGATIVE_REGISTRATION_CHECKS_OK")
+print("ARCHIVED_LEGAL_DOCUMENTS_OK")
+PY
+"$ctl" preflight
+trap - ERR
+printf 'LEGAL_ACCEPTANCE_ACTIVE\n'
+printf 'Регистрация требует согласия; запуск оффера требует подтверждения владельцем бренда.\n'
+)
