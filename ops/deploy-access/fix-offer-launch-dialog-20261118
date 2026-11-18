@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+(
+set -Eeuo pipefail
+ctl=/usr/local/sbin/svyazka-deployctl
+release="$(readlink -f /opt/svyazka/current)"
+[[ "$EUID" == 0 && "$release" == /opt/svyazka/releases/* ]]
+[[ "$(cat "$release/COMMIT_SHA")" == 548b6356ca589e4a7e5affbfaa7cbac748b659fe ]] || { echo 'Активный релиз изменился. Остановлено.'; exit 1; }
+work="$(mktemp -d /root/svyazka-offer-dialog-fix.XXXXXX)"
+source="$release/frontend/src/App.jsx"
+cp -p "$source" "$work/App.jsx"
+image="$(docker inspect --format '{{.Config.Image}}' svyazka-production-frontend-1)"
+[[ "$image" == svyazka-production-frontend || "$image" == svyazka-production-frontend:latest ]]
+tag=rollback-2026111801
+if docker image inspect "svyazka-production-frontend:$tag" >/dev/null 2>&1; then
+  echo 'Резервный образ уже существует; повторная установка остановлена.'
+  exit 1
+fi
+"$ctl" preserve-image frontend "$tag"
+attempted=false
+rollback() {
+  code=$?
+  trap - ERR
+  cp -p "$work/App.jsx" "$source"
+  docker tag "svyazka-production-frontend:$tag" "$image"
+  if [[ "$attempted" == true ]]; then "$ctl" activate "$(basename "$release")" frontend; fi
+  echo "Исправление отменено. BACKUP=$work"
+  exit "$code"
+}
+trap rollback ERR
+python3 - "$source" <<'PY'
+from pathlib import Path
+import hashlib,sys
+p=Path(sys.argv[1]);s=p.read_text()
+old='import React, { useEffect, useMemo, useState } from "react";'
+new='import React, { useEffect, useMemo, useRef, useState } from "react";'
+if s.count(old)!=1 or 'function OfferLaunchReview(' not in s:
+ raise SystemExit("Исходник изменился. Остановлено.")
+if hashlib.sha256(s.encode()).hexdigest()!="be0f394bcb858778ebb21bfb7df6dead735a13075f6e7e31baa701c11ca5ebf6":
+ raise SystemExit("Контрольная сумма исходника отличается. Остановлено.")
+p.write_text(s.replace(old,new,1))
+PY
+"$ctl" build "$(basename "$release")" frontend
+[[ "$(readlink -f /opt/svyazka/current)" == "$release" ]]
+attempted=true
+"$ctl" activate "$(basename "$release")" frontend
+healthy=false
+for attempt in {1..30}; do
+  if [[ "$(docker inspect --format '{{.State.Health.Status}}' svyazka-production-frontend-1)" == healthy ]]; then healthy=true; break; fi
+  sleep 2
+done
+[[ "$healthy" == true ]]
+"$ctl" preflight
+trap - ERR
+printf 'OFFER_LAUNCH_DIALOG_FIXED\nBACKUP=%s\n' "$work"
+)
